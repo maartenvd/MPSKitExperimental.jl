@@ -1,0 +1,19 @@
+name = "MPSKitExperimental"
+uuid = "dc5af957-468e-4fce-9c62-67d3e1fd9a40"
+authors = ["maavdamm "]
+version = "0.1.0"
+
+[deps]
+FLoops = "cc61a311-1640-44b5-9fba-1b764f453329"
+FoldsThreads = "9c68100b-dfe1-47cf-94c8-95104e173443"
+KrylovKit = "0b1a1467-8014-51b9-945f-bf0ae24f4b77"
+LinearAlgebra = "37e2e46d-f89d-539d-b4ee-838fcccc9c8e"
+MPSKit = "bb1c41ca-d63c-52ed-829e-0820dda26502"
+Mmap = "a63ad114-7e13-5084-954f-fe012c677804"
+OptimKit = "77e91f04-9b3b-57a6-a776-40b61faaebe0"
+Serialization = "9e88b42a-f829-5b0c-bbe9-9e923198166b"
+Strided = "5e0ebb24-38b0-5f93-81fe-25c709ecae67"
+TensorKit = "07d1fe3e-3e46-537d-9eac-e9e13d0d4cec"
+TensorKitManifolds = "11fa318c-39cb-4a83-b1ed-cdc7ba1e3684"
+TensorOperations = "6aa20fa7-93e2-5fca-9bc0-fbd0db3c71a2"
+Transducers = "28d57a85-8fef-5791-bfe6-a80928e7c999"
