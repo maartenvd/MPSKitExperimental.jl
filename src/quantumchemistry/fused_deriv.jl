@@ -312,7 +312,7 @@ function MPSKit.∂∂AC2(pos::Int,mps,ham::FusedMPOHamiltonian{E,O,Sp},cache) w
         tcollect(tot,1:size(U,2))
     end
     
-    blocks = reduce(vcat,tcollect(mapper,keys(left_group)))
+    blocks = reduce(vcat,tcollect(mapper,intersect(keys(right_group),keys(left_group))))
     
     fused_∂∂AC2(convert(Vector{typeof(blocks[1])},blocks))
 end
