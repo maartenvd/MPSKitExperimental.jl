@@ -462,9 +462,6 @@ function fused_quantum_chemistry_hamiltonian(E0,K,V,Elt=Float64)
     @plansor LpRm[-1 -2;-3 -4] := ap[1 -2;-4]*bm[-1;-3 1]
     @plansor RpLm[-1 -2;-3 -4] := bp[-1;1 -2]*am[-3 1;-4]
 
-    LpmR = p_pm_p
-    RpmL = m_pm_m
-
 
     for i in 1:half_basis_size,j in i+1:half_basis_size-1
 
@@ -499,7 +496,7 @@ function fused_quantum_chemistry_hamiltonian(E0,K,V,Elt=Float64)
             rmask[indmap_1R[2,k]] = true;
             rblocks[indmap_1R[2,k]] = Elt(V[j,i,k,j]+V[i,j,j,k])
         end
-        push!(op_blocks[j],(lmask,B[Elt(1)],LpmR,rblocks[rmask],rmask));
+        push!(op_blocks[j],(lmask,B[Elt(1)],p_pm_p,rblocks[rmask],rmask));
 
         lmask = fill(false,cnt+1); lmask[indmap_1L[2,i]] = true;
         rmask = fill(false,cnt+1); rblocks = Vector{Elt}(undef,cnt+1);
@@ -515,7 +512,7 @@ function fused_quantum_chemistry_hamiltonian(E0,K,V,Elt=Float64)
             rmask[indmap_1R[1,k]] = true;
             rblocks[indmap_1R[1,k]] = Elt(V[j,k,i,j]+V[k,j,j,i])
         end
-        push!(op_blocks[j],(lmask,B[Elt(1)],RpmL,rblocks[rmask],rmask));
+        push!(op_blocks[j],(lmask,B[Elt(1)],m_pm_m,rblocks[rmask],rmask));
     end
     for j in half_basis_size:basis_size, k in j+1:basis_size
     
@@ -549,7 +546,7 @@ function fused_quantum_chemistry_hamiltonian(E0,K,V,Elt=Float64)
             lmask[indmap_1L[1,i]] = true;
             rblocks[indmap_1L[1,i]] = Elt(V[j,i,k,j]+V[i,j,j,k])
         end
-        push!(op_blocks[j],(lmask,rblocks[lmask],LpmR,B[Elt(1)],rmask));
+        push!(op_blocks[j],(lmask,rblocks[lmask],p_pm_p,B[Elt(1)],rmask));
 
         lmask = fill(false,cnt+1); rmask = fill(false,cnt+1); 
         rblocks = Vector{Elt}(undef,cnt+1); rmask[indmap_1R[1,k]] = true;
@@ -565,18 +562,14 @@ function fused_quantum_chemistry_hamiltonian(E0,K,V,Elt=Float64)
             lmask[indmap_1L[2,i]] = true;
             rblocks[indmap_1L[2,i]] = Elt(V[j,k,i,j]+V[k,j,j,i])
         end
-        push!(op_blocks[j],(lmask,rblocks[lmask],RpmL,B[Elt(1)],rmask));
+        push!(op_blocks[j],(lmask,rblocks[lmask],m_pm_m,B[Elt(1)],rmask));
     end 
 
     println("1|2|1 $(sum(length.(op_blocks)))")
 
 
     # 2|2 - can be improved, but doesn't really contribute to running time
-    __mm = bmbm_ut
-    __pp = bpbp_ut
-    _p_m = bpbm_ut
     @plansor _pm_left[-1 -2;-3 -4] := (mp_f*Lmap_apam_to_pm)[-1]*h_pm[-2;-3]*conj(ut[-4])
-    _pm_ = _pm_left
     for j in 2:half_basis_size
         lmask = fill(false,cnt+1); rmask = fill(false,cnt+1); rmask[end] = true;
         lblocks = Vector{Elt}(undef,cnt+1);
@@ -584,7 +577,7 @@ function fused_quantum_chemistry_hamiltonian(E0,K,V,Elt=Float64)
             lmask[indmap_2L[1,i,1,i]] = true;
             lblocks[indmap_2L[1,i,1,i]] = Elt(V[i,i,j,j])
         end
-        push!(op_blocks[j],(lmask,lblocks[lmask],__mm,B[Elt(1)],rmask))
+        push!(op_blocks[j],(lmask,lblocks[lmask],bmbm_ut,B[Elt(1)],rmask))
 
         lmask = fill(false,cnt+1); rmask = fill(false,cnt+1); rmask[end] = true;
         lblocks = Vector{Elt}(undef,cnt+1);
@@ -592,7 +585,7 @@ function fused_quantum_chemistry_hamiltonian(E0,K,V,Elt=Float64)
             lmask[indmap_2L[2,i,2,i]] = true;
             lblocks[indmap_2L[2,i,2,i]] = Elt(V[j,j,i,i])
         end
-        push!(op_blocks[j],(lmask,lblocks[lmask],__pp,B[Elt(1)],rmask))
+        push!(op_blocks[j],(lmask,lblocks[lmask],bpbp_ut,B[Elt(1)],rmask))
 
 
         lmask = fill(false,cnt+1); rmask = fill(false,cnt+1); rmask[end] = true;
@@ -601,7 +594,7 @@ function fused_quantum_chemistry_hamiltonian(E0,K,V,Elt=Float64)
             lmask[indmap_2L[2,i,1,i]] = true;
             lblocks[indmap_2L[2,i,1,i]] = Elt(V[j,i,j,i]+V[i,j,i,j])
         end
-        push!(op_blocks[j],(lmask,lblocks[lmask],_p_m,B[Elt(1)],rmask))
+        push!(op_blocks[j],(lmask,lblocks[lmask],bpbm_ut,B[Elt(1)],rmask))
 
         lmask = fill(false,cnt+1); rmask = fill(false,cnt+1); rmask[end] = true;
         lblocks = Vector{Elt}(undef,cnt+1);
@@ -609,14 +602,9 @@ function fused_quantum_chemistry_hamiltonian(E0,K,V,Elt=Float64)
             lmask[indmap_2L[2,i,1,i]] = true;
             lblocks[indmap_2L[2,i,1,i]] = Elt(V[j,i,i,j]+V[i,j,j,i])
         end
-        push!(op_blocks[j],(lmask,lblocks[lmask],_pm_,B[Elt(1)],rmask))
+        push!(op_blocks[j],(lmask,lblocks[lmask],_pm_left,B[Elt(1)],rmask))
     end
-    __mm = ut_amam;
-    __pp = ut_apap;
-    _p_m = ut_apam
-    @plansor _p_m[-1 -2;-3 -4] := ut[-1]*ap[-3 1;2]*am[1 -2;3]*conj(pm_f[-4;2 3])
-    @plansor _pm_[-1 -2;-3 -4] := ut[-1]*h_pm[-2;-3]*(transpose(Rmap_bpbm_to_pm*pm_f',(1,)))[-4]
-    _pm_right = _pm_
+    @plansor _pm_right[-1 -2;-3 -4] := ut[-1]*h_pm[-2;-3]*(transpose(Rmap_bpbm_to_pm*pm_f',(1,)))[-4]
 
     for i in half_basis_size:basis_size
         lmask = fill(false,cnt+1); rmask = fill(false,cnt+1); lmask[1] = true;
@@ -625,7 +613,7 @@ function fused_quantum_chemistry_hamiltonian(E0,K,V,Elt=Float64)
             rmask[indmap_2R[1,j,1,j]] = true;
             rblocks[indmap_2R[1,j,1,j]] = Elt(V[j,j,i,i])
         end
-        push!(op_blocks[i],(lmask,B[Elt(1)],__mm,rblocks[rmask],rmask))
+        push!(op_blocks[i],(lmask,B[Elt(1)],ut_amam,rblocks[rmask],rmask))
 
         lmask = fill(false,cnt+1); rmask = fill(false,cnt+1); lmask[1] = true;
         rblocks = Vector{Elt}(undef,cnt+1);
@@ -633,7 +621,7 @@ function fused_quantum_chemistry_hamiltonian(E0,K,V,Elt=Float64)
             rmask[indmap_2R[2,j,2,j]] = true;
             rblocks[indmap_2R[2,j,2,j]] = Elt(V[i,i,j,j])
         end
-        push!(op_blocks[i],(lmask,B[Elt(1)],__pp,rblocks[rmask],rmask))
+        push!(op_blocks[i],(lmask,B[Elt(1)],ut_apap,rblocks[rmask],rmask))
 
         lmask = fill(false,cnt+1); rmask = fill(false,cnt+1); lmask[1] = true;
         rblocks = Vector{Elt}(undef,cnt+1);
@@ -641,7 +629,7 @@ function fused_quantum_chemistry_hamiltonian(E0,K,V,Elt=Float64)
             rmask[indmap_2R[2,j,1,j]] = true;
             rblocks[indmap_2R[2,j,1,j]] = Elt(V[i,j,i,j]+V[j,i,j,i])
         end
-        push!(op_blocks[i],(lmask,B[Elt(1)],_p_m,rblocks[rmask],rmask))
+        push!(op_blocks[i],(lmask,B[Elt(1)],ut_apam,rblocks[rmask],rmask))
 
         lmask = fill(false,cnt+1); rmask = fill(false,cnt+1); lmask[1] = true;
         rblocks = Vector{Elt}(undef,cnt+1);
@@ -649,15 +637,12 @@ function fused_quantum_chemistry_hamiltonian(E0,K,V,Elt=Float64)
             rmask[indmap_2R[2,j,1,j]] = true;
             rblocks[indmap_2R[2,j,1,j]] = Elt(V[j,i,i,j]+V[i,j,j,i])
         end
-        push!(op_blocks[i],(lmask,B[Elt(1)],_pm_,rblocks[rmask],rmask))
+        push!(op_blocks[i],(lmask,B[Elt(1)],_pm_right,rblocks[rmask],rmask))
     end
     
     println("2|2 $(sum(length.(op_blocks)))")
 
     # 2|1|1
-    pp__ = ut_apap
-    jpkm_1 = -(_pm_)/2
-    jpkm_2 = ut_amap + _pm_/2
     # (i,j) ≥ half_basis_size
     for i in half_basis_size:basis_size
 
@@ -667,7 +652,7 @@ function fused_quantum_chemistry_hamiltonian(E0,K,V,Elt=Float64)
             rmask[indmap_2R[1,j,1,k]] = true;
             rblocks[indmap_2R[1,j,1,k]] = Elt(V[j,k,i,i]+V[k,j,i,i]);
         end
-        push!(op_blocks[i],(lmask,B[Elt(1)],__mm,rblocks[rmask],rmask))
+        push!(op_blocks[i],(lmask,B[Elt(1)],ut_amam,rblocks[rmask],rmask))
 
         lmask = fill(false,cnt+1); rmask = fill(false,cnt+1); lmask[1] = true;
         rblocks = Vector{Elt}(undef,cnt+1);
@@ -675,7 +660,7 @@ function fused_quantum_chemistry_hamiltonian(E0,K,V,Elt=Float64)
             rmask[indmap_2R[2,j,2,k]] = true;
             rblocks[indmap_2R[2,j,2,k]] = Elt(V[i,i,j,k]+V[i,i,k,j]);
         end
-        push!(op_blocks[i],(lmask,B[Elt(1)],pp__,rblocks[rmask],rmask))
+        push!(op_blocks[i],(lmask,B[Elt(1)],ut_apap,rblocks[rmask],rmask))
         
         lmask = fill(false,cnt+1); rmask = fill(false,cnt+1); lmask[1] = true;
         rblocks = Vector{Elt}(undef,cnt+1);
@@ -688,7 +673,7 @@ function fused_quantum_chemistry_hamiltonian(E0,K,V,Elt=Float64)
             rblocks[indmap_2R[2,j,1,k]] = Elt(V[i,k,i,j]+V[k,i,j,i]);
             rblocks[indmap_2R[2,j,1,k]] += Elt(V[k,i,i,j]+V[i,k,j,i])*(-2);
         end
-        push!(op_blocks[i],(lmask,B[Elt(1)],jpkm_1,rblocks[rmask],rmask))
+        push!(op_blocks[i],(lmask,B[Elt(1)],-(_pm_right)/2,rblocks[rmask],rmask))
         
         
         lmask = fill(false,cnt+1); rmask = fill(false,cnt+1); lmask[1] = true;
@@ -699,15 +684,12 @@ function fused_quantum_chemistry_hamiltonian(E0,K,V,Elt=Float64)
             rblocks[indmap_2R[1,j,2,k]] = Elt(V[j,i,k,i]+V[i,j,i,k]);
             rblocks[indmap_2R[2,j,1,k]] = Elt(V[i,k,i,j]+V[k,i,j,i])/(-1);
         end
-        push!(op_blocks[i],(lmask,B[Elt(1)],jpkm_2,rblocks[rmask],rmask))
+        push!(op_blocks[i],(lmask,B[Elt(1)],ut_amap + _pm_right/2,rblocks[rmask],rmask))
         
     end
     
-    LLmR = bm_m
     @plansor LRLm_1[-1 -2;-3 -4] := (mp_f_1)[-1;1 2]*bm[2;3 -2]*τ[1 3;-3 -4]
-    LRLm_2 = LRLm_1 - bm_p
     @plansor LpLR_1[-1 -2;-3 -4] := (mp_f_1)[-1;1 2]*bp[1;-3 3]*τ[3 2;-4 -2]
-    LpLR_2 = bp_m - LpLR_1
     @plansor RpLL[-1 -2;-3 -4] := mm_f[-1;1 2]*bp[2;3 -2]*τ[1 3;-3 -4]
 
     # (i,j) ≤ half_basis_size
@@ -718,7 +700,7 @@ function fused_quantum_chemistry_hamiltonian(E0,K,V,Elt=Float64)
             rmask[indmap_1R[2,k]] = true;
             rblock[indmap_1R[2,k]] = Elt(V[i,i,j,k]+V[i,i,k,j])
         end
-        push!(op_blocks[j],(lmask,B[Elt(1)],LLmR,rblock[rmask],rmask));
+        push!(op_blocks[j],(lmask,B[Elt(1)],bm_m,rblock[rmask],rmask));
         
         lmask = fill(false,cnt+1); rmask = fill(false,cnt+1);
         lmask[indmap_2L[2,i,1,i]] = true; rblock = Vector{Elt}(undef,cnt+1);
@@ -735,7 +717,7 @@ function fused_quantum_chemistry_hamiltonian(E0,K,V,Elt=Float64)
             rmask[indmap_1R[2,k]] = true;
             rblock[indmap_1R[2,k]] = Elt(V[i,j,i,k]+V[j,i,k,i])
         end
-        push!(op_blocks[j],(lmask,B[Elt(1)],LpLR_2,rblock[rmask],rmask));
+        push!(op_blocks[j],(lmask,B[Elt(1)],bp_m - LpLR_1,rblock[rmask],rmask));
 
         lmask = fill(false,cnt+1); rmask = fill(false,cnt+1);
         lmask[indmap_2L[2,i,1,i]] = true; rblock = Vector{Elt}(undef,cnt+1);
@@ -752,7 +734,7 @@ function fused_quantum_chemistry_hamiltonian(E0,K,V,Elt=Float64)
             rmask[indmap_1R[1,k]] = true;
             rblock[indmap_1R[1,k]] = Elt(V[i,k,i,j]+V[k,i,j,i])
         end
-        push!(op_blocks[j],(lmask,B[Elt(1)],LRLm_2,rblock[rmask],rmask));
+        push!(op_blocks[j],(lmask,B[Elt(1)],LRLm_1 - bm_p,rblock[rmask],rmask));
 
         lmask = fill(false,cnt+1); rmask = fill(false,cnt+1);
         lmask[indmap_2L[2,i,2,i]] = true; rblock = Vector{Elt}(undef,cnt+1);
@@ -767,10 +749,6 @@ function fused_quantum_chemistry_hamiltonian(E0,K,V,Elt=Float64)
     
     # 1|1|2
     # (i,j) in indmap_2, 2 onsite
-    jimm = bmbm_ut
-    ipjm_1 = -(_pm_left/2)
-    ipjm_2 = bmbp_ut + _pm_left/2
-    ppji = bpbp_ut
     # (j,k) ≤ half_basis_size
     for k in 3:half_basis_size
 
@@ -780,7 +758,7 @@ function fused_quantum_chemistry_hamiltonian(E0,K,V,Elt=Float64)
             lmask[indmap_2L[2,i,2,j]] = true;
             lblock[indmap_2L[2,i,2,j]] = Elt(V[k,k,j,i]+V[k,k,i,j])
         end
-        push!(op_blocks[k],(lmask,lblock[lmask],ppji,B[Elt(1)],rmask));
+        push!(op_blocks[k],(lmask,lblock[lmask],bpbp_ut,B[Elt(1)],rmask));
         
         lmask = fill(false,cnt+1); rmask = fill(false,cnt+1); rmask[end] = true;
         lblock = Vector{Elt}(undef,cnt+1);
@@ -788,7 +766,7 @@ function fused_quantum_chemistry_hamiltonian(E0,K,V,Elt=Float64)
             lmask[indmap_2L[1,i,1,j]] = true;
             lblock[indmap_2L[1,i,1,j]] = Elt(V[i,j,k,k]+V[j,i,k,k])
         end
-        push!(op_blocks[k],(lmask,lblock[lmask],jimm,B[Elt(1)],rmask));
+        push!(op_blocks[k],(lmask,lblock[lmask],bmbm_ut,B[Elt(1)],rmask));
         
         lmask = fill(false,cnt+1); rmask = fill(false,cnt+1); rmask[end] = true;
         lblock = Vector{Elt}(undef,cnt+1);
@@ -802,7 +780,7 @@ function fused_quantum_chemistry_hamiltonian(E0,K,V,Elt=Float64)
             lblock[indmap_2L[2,i,1,j]] += Elt(V[j,k,k,i]+V[k,j,i,k])*-2;
             lblock[indmap_2L[1,i,2,j]] += Elt(V[i,k,k,j]+V[k,i,j,k])*-2;
         end
-        push!(op_blocks[k],(lmask,lblock[lmask],ipjm_1,B[Elt(1)],rmask));
+        push!(op_blocks[k],(lmask,lblock[lmask],-(_pm_left/2),B[Elt(1)],rmask));
 
 
         lmask = fill(false,cnt+1); rmask = fill(false,cnt+1); rmask[end] = true;
@@ -815,18 +793,14 @@ function fused_quantum_chemistry_hamiltonian(E0,K,V,Elt=Float64)
             lblock[indmap_2L[1,i,2,j]] = Elt(V[k,i,k,j]+V[i,k,j,k]);
 
         end
-        push!(op_blocks[k],(lmask,lblock[lmask],ipjm_2,B[Elt(1)],rmask));
+        push!(op_blocks[k],(lmask,lblock[lmask],bmbp_ut + _pm_left/2,B[Elt(1)],rmask));
 
     end
 
     @plansor jimm[-1 -2;-3 -4] := iso_pp[-1;1]*ap[-3 2;3]*τ[2 1;4 -2]*conj(pp_f[-4;3 4])
     @plansor ppji[-1 -2;-3 -4] := iso_mm[-1;1]*am[-3 2;3]*τ[2 1;4 -2]*conj(mm_f[-4;3 4])
-    
     @plansor jpim_1[-1 -2;-3 -4] := iso_mm[-1;1]*ap[-3 2;3]*τ[2 1;4 -2]*conj((pm_f_1)[-4;3 4])
-    jpim_2 = jpim_1 - m_ap
-    
     @plansor ipjm_1[-1 -2;-3 -4] := iso_pp[-1;1]*τ[-3 1;2 3]*am[3 -2;4]*conj((pm_f_1)[-4;2 4])
-    ipjm_2 = p_am - ipjm_1
 
     # (j,k) ≥ half_basis_size
     for j in half_basis_size:basis_size, k in j+1:basis_size
@@ -863,7 +837,7 @@ function fused_quantum_chemistry_hamiltonian(E0,K,V,Elt=Float64)
             lmask[indmap_1L[2,i]] = true;
             rblock[indmap_1L[2,i]] = Elt(V[j,k,i,k]+V[k,j,k,i])
         end
-        push!(op_blocks[j],(lmask,rblock[lmask],jpim_2,B[Elt(1)],rmask));
+        push!(op_blocks[j],(lmask,rblock[lmask],jpim_1 - m_ap,B[Elt(1)],rmask));
         
         
         lmask = fill(false,cnt+1); rmask = fill(false,cnt+1);
@@ -883,7 +857,7 @@ function fused_quantum_chemistry_hamiltonian(E0,K,V,Elt=Float64)
             lmask[indmap_1L[1,i]] = true;
             rblock[indmap_1L[1,i]] = Elt(V[i,k,j,k]+V[k,i,k,j])
         end
-        push!(op_blocks[j],(lmask,rblock[lmask],ipjm_2,B[Elt(1)],rmask));    
+        push!(op_blocks[j],(lmask,rblock[lmask],p_am - ipjm_1,B[Elt(1)],rmask));    
     end
 
     println("1|1|2 $(sum(length.(op_blocks)))")
@@ -891,23 +865,7 @@ function fused_quantum_chemistry_hamiltonian(E0,K,V,Elt=Float64)
     # 1|1|1|1
     # (i,j) in indmap_2, 1 in indmap_4, 1 onsite
 
-    pjiR = -2*LpLR_1
-    Rjim = -2*LRLm_1
-    kjil = -2*jpim_1
-    kijl = -2*ipjm_1
     @plansor jimR_1[-1 -2;-3 -4] := pp_f_1[-1;1 2]*τ[3 2;-4 -2]*bm[1;-3 3]
-    jimR_2 = bm_m - jimR_1;
-    jpiR_2 = bp_m - LpLR_1;
-    jRim_2 = LRLm_1 - bm_p;    
-    Rpji_1 =   (RpLL+bp_p)/2;
-    Rpji_2 =   (RpLL-bp_p)/2;
-    jikl_1 = (p_ap+jimm)/2
-    jikl_2 =  (p_ap-jimm)/2
-    likj_2 = (p_am-ipjm_1)
-    jkil_2 = m_ap-jpim_1
-    lkij_1 = (m_am + ppji)/2
-    lkij_2 = (m_am - ppji)/2
-    ikjl_2 = -likj_2;
     
     # 3 left of half_basis_size
     for k in 3:half_basis_size,l in k+1:basis_size
@@ -926,14 +884,14 @@ function fused_quantum_chemistry_hamiltonian(E0,K,V,Elt=Float64)
             lblocks[indmap_2L[1,i,2,j]] = (V[i,k,l,j]+V[k,i,j,l]);
             lblocks[indmap_2L[1,i,2,j]] += (V[k,i,l,j]+V[i,k,j,l])/(-2);
         end
-        push!(op_blocks[k],block2masks(lblocks,pjiR,rblocks));
+        push!(op_blocks[k],block2masks(lblocks,-2*LpLR_1,rblocks));
 
         lblocks = zeros(B,cnt+1); rblocks = zeros(B,cnt+1); rblocks[indmap_1R[2,l]] = Elt(1);
         for i in 1:k-1, j in i+1:k-1
             lblocks[indmap_2L[2,i,1,j]] = (V[k,j,l,i]+V[j,k,i,l]);
             lblocks[indmap_2L[1,i,2,j]] = -(V[k,i,l,j]+V[i,k,j,l]);
         end
-        push!(op_blocks[k],block2masks(lblocks,jpiR_2,rblocks));
+        push!(op_blocks[k],block2masks(lblocks,bp_m - LpLR_1,rblocks));
 
         lblocks = zeros(B,cnt+1); rblocks = zeros(B,cnt+1); rblocks[indmap_1R[1,l]] = Elt(1);
         for i in 1:k-1, j in i+1:k-1
@@ -943,14 +901,14 @@ function fused_quantum_chemistry_hamiltonian(E0,K,V,Elt=Float64)
             lblocks[indmap_2L[1,i,2,j]] = (V[l,i,k,j]+V[i,l,j,k])/(-2);
             lblocks[indmap_2L[1,i,2,j]] += (V[i,l,k,j]+V[l,i,j,k]);
         end
-        push!(op_blocks[k],block2masks(lblocks,Rjim,rblocks));
+        push!(op_blocks[k],block2masks(lblocks,-2*LRLm_1,rblocks));
 
         lblocks = zeros(B,cnt+1); rblocks = zeros(B,cnt+1); rblocks[indmap_1R[1,l]] = Elt(1);
         for i in 1:k-1, j in i+1:k-1
             lblocks[indmap_2L[2,i,1,j]] = (V[l,j,k,i]+V[j,l,i,k]);
             lblocks[indmap_2L[1,i,2,j]] = -(V[l,i,k,j]+V[i,l,j,k]);
         end
-        push!(op_blocks[k],block2masks(lblocks,jRim_2,rblocks));
+        push!(op_blocks[k],block2masks(lblocks,LRLm_1 - bm_p,rblocks));
 
         lblocks = zeros(B,cnt+1); rblocks = zeros(B,cnt+1); rblocks[indmap_1R[2,l]] = Elt(1);
         for i in 1:k-1, j in i+1:k-1
@@ -964,21 +922,21 @@ function fused_quantum_chemistry_hamiltonian(E0,K,V,Elt=Float64)
             lblocks[indmap_2L[1,i,1,j]] = (V[i,j,l,k]+V[j,i,k,l]);
             lblocks[indmap_2L[1,i,1,j]] -= (V[j,i,l,k]+V[i,j,k,l]);
         end
-        push!(op_blocks[k],block2masks(lblocks,jimR_2,rblocks));
+        push!(op_blocks[k],block2masks(lblocks,bm_m - jimR_1,rblocks));
 
         lblocks = zeros(B,cnt+1); rblocks = zeros(B,cnt+1); rblocks[indmap_1R[1,l]] = Elt(1);
         for i in 1:k-1, j in i+1:k-1
             lblocks[indmap_2L[2,i,2,j]] = (V[l,k,i,j]+V[k,l,j,i]);
             lblocks[indmap_2L[2,i,2,j]] += (V[l,k,j,i]+V[k,l,i,j]);
         end
-        push!(op_blocks[k],block2masks(lblocks,Rpji_1,rblocks));
+        push!(op_blocks[k],block2masks(lblocks,(RpLL+bp_p)/2,rblocks));
         
         lblocks = zeros(B,cnt+1); rblocks = zeros(B,cnt+1); rblocks[indmap_1R[1,l]] = Elt(1);
         for i in 1:k-1, j in i+1:k-1
             lblocks[indmap_2L[2,i,2,j]] = -(V[l,k,i,j]+V[k,l,j,i]);
             lblocks[indmap_2L[2,i,2,j]] += (V[l,k,j,i]+V[k,l,i,j]);
         end
-        push!(op_blocks[k],block2masks(lblocks,Rpji_2,rblocks));
+        push!(op_blocks[k],block2masks(lblocks,(RpLL-bp_p)/2,rblocks));
     end
 
     println("1|1|1|1 (1,3) $(sum(length.(op_blocks)))")
@@ -995,53 +953,53 @@ function fused_quantum_chemistry_hamiltonian(E0,K,V,Elt=Float64)
             rblocks[indmap_1R[2,l]] = (V[i,k,l,j]+V[k,i,j,l]);
             rblocks[indmap_1R[2,l]] += (V[k,i,l,j]+V[i,k,j,l])/(-2);
         end
-        push!(op_blocks[k],block2masks(lblocks,pjiR,rblocks));
+        push!(op_blocks[k],block2masks(lblocks,-2*LpLR_1,rblocks));
 
         lblocks = zeros(B,cnt+1); rblocks = zeros(B,cnt+1); lblocks[indmap_2L[2,i,1,j]] = Elt(1)
         for l in k+1:basis_size
             rblocks[indmap_1R[2,l]] = (V[j,k,l,i]+V[k,j,i,l]);
             rblocks[indmap_1R[2,l]] += (V[k,j,l,i]+V[j,k,i,l])/(-2);
         end
-        push!(op_blocks[k],block2masks(lblocks,pjiR,rblocks));
+        push!(op_blocks[k],block2masks(lblocks,-2*LpLR_1,rblocks));
 
         lblocks = zeros(B,cnt+1); rblocks = zeros(B,cnt+1); lblocks[indmap_2L[2,i,1,j]] = Elt(1);
         for l in k+1:basis_size
             rblocks[indmap_1R[2,l]] = (V[k,j,l,i]+V[j,k,i,l]);
         end
-        push!(op_blocks[k],block2masks(lblocks,jpiR_2,rblocks));
+        push!(op_blocks[k],block2masks(lblocks,bp_m - LpLR_1,rblocks));
 
         lblocks = zeros(B,cnt+1); rblocks = zeros(B,cnt+1); lblocks[indmap_2L[1,i,2,j]] = Elt(1);
         for l in k+1:basis_size
             rblocks[indmap_1R[2,l]] = -(V[k,i,l,j]+V[i,k,j,l]);
         end
-        push!(op_blocks[k],block2masks(lblocks,jpiR_2,rblocks));
+        push!(op_blocks[k],block2masks(lblocks,bp_m - LpLR_1,rblocks));
 
         lblocks = zeros(B,cnt+1); rblocks = zeros(B,cnt+1); lblocks[indmap_2L[2,i,1,j]] = Elt(1);
         for l in k+1:basis_size
             rblocks[indmap_1R[1,l]] = (V[j,l,k,i]+V[l,j,i,k]);
             rblocks[indmap_1R[1,l]] += (V[l,j,k,i]+V[j,l,i,k])/(-2);
         end
-        push!(op_blocks[k],block2masks(lblocks,Rjim,rblocks));
+        push!(op_blocks[k],block2masks(lblocks,-2*LRLm_1,rblocks));
 
         lblocks = zeros(B,cnt+1); rblocks = zeros(B,cnt+1); lblocks[indmap_2L[1,i,2,j]] = Elt(1);
         for l in k+1:basis_size
             rblocks[indmap_1R[1,l]] = (V[l,i,k,j]+V[i,l,j,k])/(-2);
             rblocks[indmap_1R[1,l]] += (V[i,l,k,j]+V[l,i,j,k]);
         end
-        push!(op_blocks[k],block2masks(lblocks,Rjim,rblocks));
+        push!(op_blocks[k],block2masks(lblocks,-2*LRLm_1,rblocks));
 
 
         lblocks = zeros(B,cnt+1); rblocks = zeros(B,cnt+1); lblocks[indmap_2L[2,i,1,j]] = Elt(1);
         for l in k+1:basis_size
             rblocks[indmap_1R[1,l]] = (V[l,j,k,i]+V[j,l,i,k]);
         end
-        push!(op_blocks[k],block2masks(lblocks,jRim_2,rblocks));
+        push!(op_blocks[k],block2masks(lblocks,LRLm_1 - bm_p,rblocks));
 
         lblocks = zeros(B,cnt+1); rblocks = zeros(B,cnt+1);lblocks[indmap_2L[1,i,2,j]] = Elt(1);
         for l in k+1:basis_size
             rblocks[indmap_1R[1,l]] = -(V[l,i,k,j]+V[i,l,j,k]);
         end
-        push!(op_blocks[k],block2masks(lblocks,jRim_2,rblocks));
+        push!(op_blocks[k],block2masks(lblocks,LRLm_1 - bm_p,rblocks));
 
         
         lblocks = zeros(B,cnt+1); rblocks = zeros(B,cnt+1); lblocks[indmap_2L[1,i,1,j]] = Elt(1);
@@ -1057,7 +1015,7 @@ function fused_quantum_chemistry_hamiltonian(E0,K,V,Elt=Float64)
             rblocks[indmap_1R[2,l]] = (V[i,j,l,k]+V[j,i,k,l]);
             rblocks[indmap_1R[2,l]] -= (V[j,i,l,k]+V[i,j,k,l]);
         end
-        push!(op_blocks[k],block2masks(lblocks,jimR_2,rblocks));
+        push!(op_blocks[k],block2masks(lblocks,bm_m - jimR_1,rblocks));
 
         
         lblocks = zeros(B,cnt+1); rblocks = zeros(B,cnt+1); lblocks[indmap_2L[2,i,2,j]] = Elt(1);
@@ -1065,14 +1023,14 @@ function fused_quantum_chemistry_hamiltonian(E0,K,V,Elt=Float64)
             rblocks[indmap_1R[1,l]] = (V[l,k,i,j]+V[k,l,j,i]);
             rblocks[indmap_1R[1,l]] += (V[l,k,j,i]+V[k,l,i,j]);
         end
-        push!(op_blocks[k],block2masks(lblocks,Rpji_1,rblocks));
+        push!(op_blocks[k],block2masks(lblocks,(RpLL+bp_p)/2,rblocks));
         
         lblocks = zeros(B,cnt+1); rblocks = zeros(B,cnt+1); lblocks[indmap_2L[2,i,2,j]] = Elt(1);
         for l in k+1:basis_size
             rblocks[indmap_1R[1,l]] = -(V[l,k,i,j]+V[k,l,j,i]);
             rblocks[indmap_1R[1,l]] += (V[l,k,j,i]+V[k,l,i,j]);
         end
-        push!(op_blocks[k],block2masks(lblocks,Rpji_2,rblocks));
+        push!(op_blocks[k],block2masks(lblocks,(RpLL-bp_p)/2,rblocks));
     end
 
     println("1|1|1|1 (1,3) $(sum(length.(op_blocks)))")
@@ -1095,14 +1053,14 @@ function fused_quantum_chemistry_hamiltonian(E0,K,V,Elt=Float64)
             rblocks[indmap_2R[2,k,1,l]] = (V[l,j,k,i]+V[j,l,i,k])/(-2)
             rblocks[indmap_2R[2,k,1,l]] += (V[l,j,i,k]+V[j,l,k,i]);
         end
-        push!(op_blocks[j],block2masks(lblocks,kjil,rblocks));
+        push!(op_blocks[j],block2masks(lblocks,-2*jpim_1,rblocks));
         
         lblocks = zeros(B,cnt+1); rblocks = zeros(B,cnt+1); lblocks[indmap_1L[2,i]] = Elt(1);
         for k in max(j+1,half_basis_size+1):basis_size,l in k+1:basis_size
             rblocks[indmap_2R[1,k,2,l]] = (V[j,k,i,l]+V[k,j,l,i])
             rblocks[indmap_2R[2,k,1,l]] = -(V[l,j,k,i]+V[j,l,i,k])
         end
-        push!(op_blocks[j],block2masks(lblocks,jkil_2,rblocks));
+        push!(op_blocks[j],block2masks(lblocks,m_ap-jpim_1,rblocks));
  
         lblocks = zeros(B,cnt+1); rblocks = zeros(B,cnt+1); lblocks[indmap_1L[1,i]] = Elt(1);
         for k in max(j+1,half_basis_size+1):basis_size,l in k+1:basis_size
@@ -1112,42 +1070,42 @@ function fused_quantum_chemistry_hamiltonian(E0,K,V,Elt=Float64)
             rblocks[indmap_2R[2,k,1,l]] = (V[l,i,k,j]+V[i,l,j,k])/(-2)
             rblocks[indmap_2R[2,k,1,l]] += (V[l,i,j,k]+V[i,l,k,j]);
         end
-        push!(op_blocks[j],block2masks(lblocks,kijl,rblocks));
+        push!(op_blocks[j],block2masks(lblocks,-2*ipjm_1,rblocks));
 
         lblocks = zeros(B,cnt+1); rblocks = zeros(B,cnt+1); lblocks[indmap_1L[1,i]] = Elt(1);
         for k in max(j+1,half_basis_size+1):basis_size,l in k+1:basis_size
             rblocks[indmap_2R[1,k,2,l]] = (V[i,k,j,l]+V[k,i,l,j])
             rblocks[indmap_2R[2,k,1,l]] = -(V[l,i,k,j]+V[i,l,j,k])
         end
-        push!(op_blocks[j],block2masks(lblocks,ikjl_2,rblocks));
+        push!(op_blocks[j],block2masks(lblocks,-(p_am-ipjm_1),rblocks));
     
         lblocks = zeros(B,cnt+1); rblocks = zeros(B,cnt+1); lblocks[indmap_1L[2,i]] = Elt(1);
         for k in max(j+1,half_basis_size+1):basis_size,l in k+1:basis_size
             rblocks[indmap_2R[1,k,1,l]] = (V[l,k,j,i]+V[k,l,i,j])
             rblocks[indmap_2R[1,k,1,l]] += (V[l,k,i,j]+V[k,l,j,i])
         end
-        push!(op_blocks[j],block2masks(lblocks,lkij_1,rblocks));
+        push!(op_blocks[j],block2masks(lblocks,(m_am + ppji)/2,rblocks));
 
         lblocks = zeros(B,cnt+1); rblocks = zeros(B,cnt+1); lblocks[indmap_1L[2,i]] = Elt(1);
         for k in max(j+1,half_basis_size+1):basis_size,l in k+1:basis_size
             rblocks[indmap_2R[1,k,1,l]] = -(V[l,k,j,i]+V[k,l,i,j])
             rblocks[indmap_2R[1,k,1,l]] += (V[l,k,i,j]+V[k,l,j,i])
         end
-        push!(op_blocks[j],block2masks(lblocks,lkij_2,rblocks));
+        push!(op_blocks[j],block2masks(lblocks,(m_am - ppji)/2,rblocks));
 
         lblocks = zeros(B,cnt+1); rblocks = zeros(B,cnt+1); lblocks[indmap_1L[1,i]] = Elt(1);
         for k in max(j+1,half_basis_size+1):basis_size,l in k+1:basis_size
             rblocks[indmap_2R[2,k,2,l]] = (V[j,i,k,l]+V[i,j,l,k])
             rblocks[indmap_2R[2,k,2,l]] += (V[i,j,k,l]+V[j,i,l,k])
         end
-        push!(op_blocks[j],block2masks(lblocks,jikl_1,rblocks));
+        push!(op_blocks[j],block2masks(lblocks,(p_ap+jimm)/2,rblocks));
 
         lblocks = zeros(B,cnt+1); rblocks = zeros(B,cnt+1); lblocks[indmap_1L[1,i]] = Elt(1);
         for k in max(j+1,half_basis_size+1):basis_size,l in k+1:basis_size
             rblocks[indmap_2R[2,k,2,l]] = (V[j,i,k,l]+V[i,j,l,k])
             rblocks[indmap_2R[2,k,2,l]] -= (V[i,j,k,l]+V[j,i,l,k])
         end
-        push!(op_blocks[j],block2masks(lblocks,jikl_2,rblocks));
+        push!(op_blocks[j],block2masks(lblocks,(p_ap-jimm)/2,rblocks));
         
     end
     
@@ -1167,27 +1125,27 @@ function fused_quantum_chemistry_hamiltonian(E0,K,V,Elt=Float64)
             lblocks[indmap_1L[2,i]] = (V[j,k,i,l]+V[k,j,l,i])/(-2)
             lblocks[indmap_1L[2,i]] += (V[k,j,i,l]+V[j,k,l,i])
         end
-        push!(op_blocks[j],block2masks(lblocks,kjil,rblocks));
+        push!(op_blocks[j],block2masks(lblocks,-2*jpim_1,rblocks));
 
         lblocks = zeros(B,cnt+1); rblocks = zeros(B,cnt+1); rblocks[indmap_2R[2,k,1,l]] = Elt(1);
         for i in 1:j-1
             lblocks[indmap_1L[2,i]] = (V[l,j,k,i]+V[j,l,i,k])/(-2)
             lblocks[indmap_1L[2,i]] += (V[l,j,i,k]+V[j,l,k,i]);
         end
-        push!(op_blocks[j],block2masks(lblocks,kjil,rblocks));
+        push!(op_blocks[j],block2masks(lblocks,-2*jpim_1,rblocks));
         
         
         lblocks = zeros(B,cnt+1); rblocks = zeros(B,cnt+1); rblocks[indmap_2R[1,k,2,l]] = Elt(1);
         for i in 1:j-1
             lblocks[indmap_1L[2,i]] = (V[j,k,i,l]+V[k,j,l,i])
         end
-        push!(op_blocks[j],block2masks(lblocks,jkil_2,rblocks));
+        push!(op_blocks[j],block2masks(lblocks,m_ap-jpim_1,rblocks));
         
         lblocks = zeros(B,cnt+1); rblocks = zeros(B,cnt+1); rblocks[indmap_2R[2,k,1,l]] = Elt(1);
         for i in 1:j-1
             lblocks[indmap_1L[2,i]] = -(V[l,j,k,i]+V[j,l,i,k])
         end
-        push!(op_blocks[j],block2masks(lblocks,jkil_2,rblocks));
+        push!(op_blocks[j],block2masks(lblocks,m_ap-jpim_1,rblocks));
  
         
         lblocks = zeros(B,cnt+1); rblocks = zeros(B,cnt+1); rblocks[indmap_2R[1,k,2,l]] = Elt(1);
@@ -1195,27 +1153,27 @@ function fused_quantum_chemistry_hamiltonian(E0,K,V,Elt=Float64)
             lblocks[indmap_1L[1,i]] = (V[i,k,j,l]+V[k,i,l,j])/(-2)
             lblocks[indmap_1L[1,i]] += (V[k,i,j,l]+V[i,k,l,j])
         end
-        push!(op_blocks[j],block2masks(lblocks,kijl,rblocks));
+        push!(op_blocks[j],block2masks(lblocks,-2*ipjm_1,rblocks));
 
         lblocks = zeros(B,cnt+1); rblocks = zeros(B,cnt+1); rblocks[indmap_2R[2,k,1,l]] = Elt(1);
         for i in 1:j-1
             lblocks[indmap_1L[1,i]] = (V[l,i,k,j]+V[i,l,j,k])/(-2)
             lblocks[indmap_1L[1,i]] += (V[l,i,j,k]+V[i,l,k,j]);
         end
-        push!(op_blocks[j],block2masks(lblocks,kijl,rblocks));
+        push!(op_blocks[j],block2masks(lblocks,-2*ipjm_1,rblocks));
 
         
         lblocks = zeros(B,cnt+1); rblocks = zeros(B,cnt+1); rblocks[indmap_2R[1,k,2,l]] = Elt(1);
         for i in 1:j-1
             lblocks[indmap_1L[1,i]] = (V[i,k,j,l]+V[k,i,l,j])
         end
-        push!(op_blocks[j],block2masks(lblocks,ikjl_2,rblocks));
+        push!(op_blocks[j],block2masks(lblocks,-(p_am-ipjm_1),rblocks));
 
         lblocks = zeros(B,cnt+1); rblocks = zeros(B,cnt+1); rblocks[indmap_2R[2,k,1,l]] = Elt(1);
         for i in 1:j-1
             lblocks[indmap_1L[1,i]] = -(V[l,i,k,j]+V[i,l,j,k])
         end
-        push!(op_blocks[j],block2masks(lblocks,ikjl_2,rblocks));
+        push!(op_blocks[j],block2masks(lblocks,-(p_am-ipjm_1),rblocks));
     
         
         lblocks = zeros(B,cnt+1); rblocks = zeros(B,cnt+1); rblocks[indmap_2R[1,k,1,l]] = Elt(1);
@@ -1223,14 +1181,14 @@ function fused_quantum_chemistry_hamiltonian(E0,K,V,Elt=Float64)
             lblocks[indmap_1L[2,i]] = (V[l,k,j,i]+V[k,l,i,j])
             lblocks[indmap_1L[2,i]] += (V[l,k,i,j]+V[k,l,j,i])
         end
-        push!(op_blocks[j],block2masks(lblocks,lkij_1,rblocks));
+        push!(op_blocks[j],block2masks(lblocks,(m_am + ppji)/2,rblocks));
 
         lblocks = zeros(B,cnt+1); rblocks = zeros(B,cnt+1); rblocks[indmap_2R[1,k,1,l]] = Elt(1);
         for i in 1:j-1
             lblocks[indmap_1L[2,i]] = -(V[l,k,j,i]+V[k,l,i,j])
             lblocks[indmap_1L[2,i]] += (V[l,k,i,j]+V[k,l,j,i])
         end
-        push!(op_blocks[j],block2masks(lblocks,lkij_2,rblocks));
+        push!(op_blocks[j],block2masks(lblocks,(m_am - ppji)/2,rblocks));
 
         
         lblocks = zeros(B,cnt+1); rblocks = zeros(B,cnt+1); rblocks[indmap_2R[2,k,2,l]]  = Elt(1);
@@ -1238,26 +1196,23 @@ function fused_quantum_chemistry_hamiltonian(E0,K,V,Elt=Float64)
             lblocks[indmap_1L[1,i]] = (V[j,i,k,l]+V[i,j,l,k])
             lblocks[indmap_1L[1,i]] += (V[i,j,k,l]+V[j,i,l,k])
         end
-        push!(op_blocks[j],block2masks(lblocks,jikl_1,rblocks));
+        push!(op_blocks[j],block2masks(lblocks,(p_ap+jimm)/2,rblocks));
 
         lblocks = zeros(B,cnt+1); rblocks = zeros(B,cnt+1); rblocks[indmap_2R[2,k,2,l]]  = Elt(1);
         for i in 1:j-1
             lblocks[indmap_1L[1,i]] = (V[j,i,k,l]+V[i,j,l,k])
             lblocks[indmap_1L[1,i]] -= (V[i,j,k,l]+V[j,i,l,k])
         end
-        push!(op_blocks[j],block2masks(lblocks,jikl_2,rblocks));
+        push!(op_blocks[j],block2masks(lblocks,(p_ap-jimm)/2,rblocks));
         
     end
     println("1|1|1|1 (3,1) $(sum(length.(op_blocks)))")
 
     # loc == half_basis_size:
-    # loc == half_basis_size:
     @plansor jkil_2[-1 -2;-3 -4] := mp_f_2[-1;1 2]*ai[3;-3]*τ[3 1;4 5]*τ[5 2;6 -2]*conj(mp_f_2[-4;4 6])
-    kjil =   2*(jkil_2-pm_ai_pm)
     @plansor jikl_1[-1 -2;-3 -4] := pp_f_1[-1;1 2]*ai[3;-3]*τ[3 1;4 5]*τ[5 2;6 -2]*conj(pp_f_1[-4;4 6])
-    jikl_2 = pp_ai_pp - jikl_1
     @plansor lkij_1[-1 -2;-3 -4] := mm_f_1[-1;1 2]*ai[3;-3]*τ[3 1;4 5]*τ[5 2;6 -2]*conj(mm_f_1[-4;4 6])
-    lkij_2 = mm_ai_mm- lkij_1
+
     
     
     for k in half_basis_size+1:basis_size, l in k+1:basis_size
@@ -1271,7 +1226,7 @@ function fused_quantum_chemistry_hamiltonian(E0,K,V,Elt=Float64)
             lblocks[indmap_2L[1,i,2,j]] = Elt(V[k,i,j,l]+V[i,k,l,j])
             lblocks[indmap_2L[1,i,2,j]] += Elt(V[i,k,j,l]+V[k,i,l,j])/(-2)
         end
-        push!(op_blocks[half_basis_size],(lmask,lblocks[lmask],kjil,B[Elt(1)],rmask));
+        push!(op_blocks[half_basis_size],(lmask,lblocks[lmask], 2*(jkil_2-pm_ai_pm),B[Elt(1)],rmask));
 
         lmask = fill(false,cnt+1); rmask = fill(false,cnt+1); rmask[indmap_2R[2,k,1,l]] = true;
         lblocks = Vector{Elt}(undef,cnt+1);
@@ -1284,7 +1239,7 @@ function fused_quantum_chemistry_hamiltonian(E0,K,V,Elt=Float64)
             lblocks[indmap_2L[2,i,1,j]] = Elt(V[l,j,k,i]+V[j,l,i,k])/(-2)
             lblocks[indmap_2L[2,i,1,j]] += Elt(V[l,j,i,k]+V[j,l,k,i])
         end
-        push!(op_blocks[half_basis_size],(lmask,lblocks[lmask],kjil,B[Elt(1)],rmask));
+        push!(op_blocks[half_basis_size],(lmask,lblocks[lmask], 2*(jkil_2-pm_ai_pm),B[Elt(1)],rmask));
         
         lmask = fill(false,cnt+1); rmask = fill(false,cnt+1); rmask[indmap_2R[1,k,2,l]] = true;
         lblocks = Vector{Elt}(undef,cnt+1);
@@ -1323,7 +1278,7 @@ function fused_quantum_chemistry_hamiltonian(E0,K,V,Elt=Float64)
             lblocks[indmap_2L[1,i,1,j]] = Elt(V[j,i,k,l]+V[i,j,l,k])
             lblocks[indmap_2L[1,i,1,j]] -= Elt(V[i,j,k,l]+V[j,i,l,k])
         end
-        push!(op_blocks[half_basis_size],(lmask,lblocks[lmask],jikl_2,B[Elt(1)],rmask));
+        push!(op_blocks[half_basis_size],(lmask,lblocks[lmask],pp_ai_pp - jikl_1,B[Elt(1)],rmask));
         
         lmask = fill(false,cnt+1); rmask = fill(false,cnt+1); rmask[indmap_2R[1,k,1,l]] = true;
         lblocks = Vector{Elt}(undef,cnt+1);
@@ -1341,14 +1296,10 @@ function fused_quantum_chemistry_hamiltonian(E0,K,V,Elt=Float64)
             lblocks[indmap_2L[2,i,2,j]] = Elt(V[l,k,i,j]+V[k,l,j,i])
             lblocks[indmap_2L[2,i,2,j]] -= Elt(V[l,k,j,i]+V[k,l,i,j])
         end
-        push!(op_blocks[half_basis_size],(lmask,lblocks[lmask],lkij_2,B[Elt(1)],rmask));
+        push!(op_blocks[half_basis_size],(lmask,lblocks[lmask],mm_ai_mm- lkij_1,B[Elt(1)],rmask));
         
     end
-    
-    
-    jkki = kjil
-    jkik_2 = -jkil_2
-    jiki_2 = -jkik_2
+
     for k in half_basis_size+1:basis_size
 
         lmask = fill(false,cnt+1); rmask = fill(false,cnt+1);
@@ -1367,7 +1318,7 @@ function fused_quantum_chemistry_hamiltonian(E0,K,V,Elt=Float64)
             lblocks[indmap_2L[1,i,2,j]] = Elt(V[i,k,j,k]+V[k,i,k,j])/(-2)
             lblocks[indmap_2L[1,i,2,j]] += Elt(V[i,k,k,j]+V[k,i,j,k])
         end
-        push!(op_blocks[half_basis_size],(lmask,lblocks[lmask],jkki,B[Elt(1)],rmask));
+        push!(op_blocks[half_basis_size],(lmask,lblocks[lmask], 2*(jkil_2-pm_ai_pm),B[Elt(1)],rmask));
         
         
         lmask = fill(false,cnt+1); rmask = fill(false,cnt+1);
@@ -1382,7 +1333,7 @@ function fused_quantum_chemistry_hamiltonian(E0,K,V,Elt=Float64)
             lmask[indmap_2L[1,i,2,j]] = true;
             lblocks[indmap_2L[1,i,2,j]] = -Elt(V[i,k,j,k]+V[k,i,k,j])
         end
-        push!(op_blocks[half_basis_size],(lmask,lblocks[lmask],jkik_2,B[Elt(1)],rmask));
+        push!(op_blocks[half_basis_size],(lmask,lblocks[lmask],-jkil_2,B[Elt(1)],rmask));
         
         lmask = fill(false,cnt+1); rmask = fill(false,cnt+1);
         lblocks = Vector{Elt}(undef,cnt+1); rmask[indmap_2R[1,k,1,k]] = true
@@ -1438,7 +1389,7 @@ function fused_quantum_chemistry_hamiltonian(E0,K,V,Elt=Float64)
             rblock[indmap_2R[2,j,1,k]] += Elt(V[k,i,j,i]+V[i,k,i,j])/(-2)
 
         end
-        push!(op_blocks[half_basis_size],(lmask,B[Elt(1)],jkki,rblock[rmask],rmask));
+        push!(op_blocks[half_basis_size],(lmask,B[Elt(1)], 2*(jkil_2-pm_ai_pm),rblock[rmask],rmask));
         
         lmask = fill(false,cnt+1); rmask = fill(false,cnt+1);
         lmask[indmap_2L[2,i,1,i]] = true; rblock = Vector{Elt}(undef,cnt+1);
@@ -1449,7 +1400,7 @@ function fused_quantum_chemistry_hamiltonian(E0,K,V,Elt=Float64)
             rblock[indmap_2R[2,j,1,k]] = -Elt(V[k,i,j,i]+V[i,k,i,j])
 
         end
-        push!(op_blocks[half_basis_size],(lmask,B[Elt(1)],jiki_2,rblock[rmask],rmask));
+        push!(op_blocks[half_basis_size],(lmask,B[Elt(1)],jkil_2,rblock[rmask],rmask));
         
     end
     
