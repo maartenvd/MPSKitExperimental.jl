@@ -456,13 +456,30 @@ function fused_quantum_chemistry_hamiltonian(E0,K,V,Elt=Float64)
     
     println("3|1 $(sum(length.(op_blocks)))")
 
+    # 2|2
+    # 2|1|1
+    # 1|1|2
+
     # 1|2|1
     @plansor LRmm[-1 -2;-3 -4] := am[1 -2;-4]*bm[-1;-3 1]
     @plansor ppLR[-1 -2;-3 -4] := ap[1 -2;-4]*bp[-1;-3 1]
     @plansor LpRm[-1 -2;-3 -4] := ap[1 -2;-4]*bm[-1;-3 1]
     @plansor RpLm[-1 -2;-3 -4] := bp[-1;1 -2]*am[-3 1;-4]
+    @plansor _pm_left[-1 -2;-3 -4] := (mp_f*Lmap_apam_to_pm)[-1]*h_pm[-2;-3]*conj(ut[-4])
+    @plansor _pm_right[-1 -2;-3 -4] := ut[-1]*h_pm[-2;-3]*(transpose(Rmap_bpbm_to_pm*pm_f',(1,)))[-4]
+
+    @plansor LRLm_1[-1 -2;-3 -4] := (mp_f_1)[-1;1 2]*bm[2;3 -2]*τ[1 3;-3 -4]
+    @plansor LpLR_1[-1 -2;-3 -4] := (mp_f_1)[-1;1 2]*bp[1;-3 3]*τ[3 2;-4 -2]
+    @plansor RpLL[-1 -2;-3 -4] := mm_f[-1;1 2]*bp[2;3 -2]*τ[1 3;-3 -4]
+
+    
+    @plansor jimm[-1 -2;-3 -4] := iso_pp[-1;1]*ap[-3 2;3]*τ[2 1;4 -2]*conj(pp_f[-4;3 4])
+    @plansor ppji[-1 -2;-3 -4] := iso_mm[-1;1]*am[-3 2;3]*τ[2 1;4 -2]*conj(mm_f[-4;3 4])
+    @plansor jpim_1[-1 -2;-3 -4] := iso_mm[-1;1]*ap[-3 2;3]*τ[2 1;4 -2]*conj((pm_f_1)[-4;3 4])
+    @plansor ipjm_1[-1 -2;-3 -4] := iso_pp[-1;1]*τ[-3 1;2 3]*am[3 -2;4]*conj((pm_f_1)[-4;2 4])
 
 
+    # 1 2 1
     for i in 1:half_basis_size,j in i+1:half_basis_size-1
 
         lmask = fill(false,cnt+1); lmask[indmap_1L[1,i]] = true;
@@ -514,185 +531,7 @@ function fused_quantum_chemistry_hamiltonian(E0,K,V,Elt=Float64)
         end
         push!(op_blocks[j],(lmask,B[Elt(1)],m_pm_m,rblocks[rmask],rmask));
     end
-    for j in half_basis_size:basis_size, k in j+1:basis_size
-    
-        lmask = fill(false,cnt+1); rmask = fill(false,cnt+1); 
-        rblocks = Vector{Elt}(undef,cnt+1); rmask[indmap_1R[1,k]] = true;
-        for i in 1:j-1
-            lmask[indmap_1L[1,i]] = true;
-            rblocks[indmap_1L[1,i]] = Elt(V[k,i,j,j]+V[i,k,j,j])
-        end
-        push!(op_blocks[j],(lmask,rblocks[lmask],LRmm,B[Elt(1)],rmask));
-
-        lmask = fill(false,cnt+1); rmask = fill(false,cnt+1); 
-        rblocks = Vector{Elt}(undef,cnt+1); rmask[indmap_1R[2,k]] = true;
-        for i in 1:j-1
-            lmask[indmap_1L[2,i]] = true;
-            rblocks[indmap_1L[2,i]] = Elt(V[j,j,k,i]+V[j,j,i,k])
-        end
-        push!(op_blocks[j],(lmask,rblocks[lmask],ppLR,B[Elt(1)],rmask));
-
-        lmask = fill(false,cnt+1); rmask = fill(false,cnt+1); 
-        rblocks = Vector{Elt}(undef,cnt+1); rmask[indmap_1R[2,k]] = true;
-        for i in 1:j-1
-            lmask[indmap_1L[1,i]] = true;
-            rblocks[indmap_1L[1,i]] = Elt(V[j,i,j,k]+V[i,j,k,j])
-        end
-        push!(op_blocks[j],(lmask,rblocks[lmask],LpRm,B[Elt(1)],rmask));
-
-        lmask = fill(false,cnt+1); rmask = fill(false,cnt+1); 
-        rblocks = Vector{Elt}(undef,cnt+1); rmask[indmap_1R[2,k]] = true;
-        for i in 1:j-1
-            lmask[indmap_1L[1,i]] = true;
-            rblocks[indmap_1L[1,i]] = Elt(V[j,i,k,j]+V[i,j,j,k])
-        end
-        push!(op_blocks[j],(lmask,rblocks[lmask],p_pm_p,B[Elt(1)],rmask));
-
-        lmask = fill(false,cnt+1); rmask = fill(false,cnt+1); 
-        rblocks = Vector{Elt}(undef,cnt+1); rmask[indmap_1R[1,k]] = true;
-        for i in 1:j-1
-            lmask[indmap_1L[2,i]] = true;
-            rblocks[indmap_1L[2,i]] = Elt(V[j,k,j,i]+V[k,j,i,j])
-        end
-        push!(op_blocks[j],(lmask,rblocks[lmask],RpLm,B[Elt(1)],rmask));
-
-        lmask = fill(false,cnt+1); rmask = fill(false,cnt+1); 
-        rblocks = Vector{Elt}(undef,cnt+1); rmask[indmap_1R[1,k]] = true;
-        for i in 1:j-1
-            lmask[indmap_1L[2,i]] = true;
-            rblocks[indmap_1L[2,i]] = Elt(V[j,k,i,j]+V[k,j,j,i])
-        end
-        push!(op_blocks[j],(lmask,rblocks[lmask],m_pm_m,B[Elt(1)],rmask));
-    end 
-
-    println("1|2|1 $(sum(length.(op_blocks)))")
-
-
-    # 2|2 - can be improved, but doesn't really contribute to running time
-    @plansor _pm_left[-1 -2;-3 -4] := (mp_f*Lmap_apam_to_pm)[-1]*h_pm[-2;-3]*conj(ut[-4])
-    for j in 2:half_basis_size
-        lmask = fill(false,cnt+1); rmask = fill(false,cnt+1); rmask[end] = true;
-        lblocks = Vector{Elt}(undef,cnt+1);
-        for i in 1:min(half_basis_size-1,j-1)
-            lmask[indmap_2L[1,i,1,i]] = true;
-            lblocks[indmap_2L[1,i,1,i]] = Elt(V[i,i,j,j])
-        end
-        push!(op_blocks[j],(lmask,lblocks[lmask],bmbm_ut,B[Elt(1)],rmask))
-
-        lmask = fill(false,cnt+1); rmask = fill(false,cnt+1); rmask[end] = true;
-        lblocks = Vector{Elt}(undef,cnt+1);
-        for i in 1:min(half_basis_size-1,j-1)
-            lmask[indmap_2L[2,i,2,i]] = true;
-            lblocks[indmap_2L[2,i,2,i]] = Elt(V[j,j,i,i])
-        end
-        push!(op_blocks[j],(lmask,lblocks[lmask],bpbp_ut,B[Elt(1)],rmask))
-
-
-        lmask = fill(false,cnt+1); rmask = fill(false,cnt+1); rmask[end] = true;
-        lblocks = Vector{Elt}(undef,cnt+1);
-        for i in 1:min(half_basis_size-1,j-1)
-            lmask[indmap_2L[2,i,1,i]] = true;
-            lblocks[indmap_2L[2,i,1,i]] = Elt(V[j,i,j,i]+V[i,j,i,j])
-        end
-        push!(op_blocks[j],(lmask,lblocks[lmask],bpbm_ut,B[Elt(1)],rmask))
-
-        lmask = fill(false,cnt+1); rmask = fill(false,cnt+1); rmask[end] = true;
-        lblocks = Vector{Elt}(undef,cnt+1);
-        for i in 1:min(half_basis_size-1,j-1)
-            lmask[indmap_2L[2,i,1,i]] = true;
-            lblocks[indmap_2L[2,i,1,i]] = Elt(V[j,i,i,j]+V[i,j,j,i])
-        end
-        push!(op_blocks[j],(lmask,lblocks[lmask],_pm_left,B[Elt(1)],rmask))
-    end
-    @plansor _pm_right[-1 -2;-3 -4] := ut[-1]*h_pm[-2;-3]*(transpose(Rmap_bpbm_to_pm*pm_f',(1,)))[-4]
-
-    for i in half_basis_size:basis_size
-        lmask = fill(false,cnt+1); rmask = fill(false,cnt+1); lmask[1] = true;
-        rblocks = Vector{Elt}(undef,cnt+1);
-        for j in i+1:basis_size
-            rmask[indmap_2R[1,j,1,j]] = true;
-            rblocks[indmap_2R[1,j,1,j]] = Elt(V[j,j,i,i])
-        end
-        push!(op_blocks[i],(lmask,B[Elt(1)],ut_amam,rblocks[rmask],rmask))
-
-        lmask = fill(false,cnt+1); rmask = fill(false,cnt+1); lmask[1] = true;
-        rblocks = Vector{Elt}(undef,cnt+1);
-        for j in i+1:basis_size
-            rmask[indmap_2R[2,j,2,j]] = true;
-            rblocks[indmap_2R[2,j,2,j]] = Elt(V[i,i,j,j])
-        end
-        push!(op_blocks[i],(lmask,B[Elt(1)],ut_apap,rblocks[rmask],rmask))
-
-        lmask = fill(false,cnt+1); rmask = fill(false,cnt+1); lmask[1] = true;
-        rblocks = Vector{Elt}(undef,cnt+1);
-        for j in i+1:basis_size
-            rmask[indmap_2R[2,j,1,j]] = true;
-            rblocks[indmap_2R[2,j,1,j]] = Elt(V[i,j,i,j]+V[j,i,j,i])
-        end
-        push!(op_blocks[i],(lmask,B[Elt(1)],ut_apam,rblocks[rmask],rmask))
-
-        lmask = fill(false,cnt+1); rmask = fill(false,cnt+1); lmask[1] = true;
-        rblocks = Vector{Elt}(undef,cnt+1);
-        for j in i+1:basis_size
-            rmask[indmap_2R[2,j,1,j]] = true;
-            rblocks[indmap_2R[2,j,1,j]] = Elt(V[j,i,i,j]+V[i,j,j,i])
-        end
-        push!(op_blocks[i],(lmask,B[Elt(1)],_pm_right,rblocks[rmask],rmask))
-    end
-    
-    println("2|2 $(sum(length.(op_blocks)))")
-
-    # 2|1|1
-    # (i,j) ≥ half_basis_size
-    for i in half_basis_size:basis_size
-
-        lmask = fill(false,cnt+1); rmask = fill(false,cnt+1); lmask[1] = true;
-        rblocks = Vector{Elt}(undef,cnt+1);
-        for j in i+1:basis_size,k in j+1:basis_size
-            rmask[indmap_2R[1,j,1,k]] = true;
-            rblocks[indmap_2R[1,j,1,k]] = Elt(V[j,k,i,i]+V[k,j,i,i]);
-        end
-        push!(op_blocks[i],(lmask,B[Elt(1)],ut_amam,rblocks[rmask],rmask))
-
-        lmask = fill(false,cnt+1); rmask = fill(false,cnt+1); lmask[1] = true;
-        rblocks = Vector{Elt}(undef,cnt+1);
-        for j in i+1:basis_size,k in j+1:basis_size
-            rmask[indmap_2R[2,j,2,k]] = true;
-            rblocks[indmap_2R[2,j,2,k]] = Elt(V[i,i,j,k]+V[i,i,k,j]);
-        end
-        push!(op_blocks[i],(lmask,B[Elt(1)],ut_apap,rblocks[rmask],rmask))
-        
-        lmask = fill(false,cnt+1); rmask = fill(false,cnt+1); lmask[1] = true;
-        rblocks = Vector{Elt}(undef,cnt+1);
-        for j in i+1:basis_size,k in j+1:basis_size            
-            rmask[indmap_2R[1,j,2,k]] = true;
-            rmask[indmap_2R[2,j,1,k]] = true;
-            rblocks[indmap_2R[1,j,2,k]] = Elt(V[j,i,k,i]+V[i,j,i,k])
-            rblocks[indmap_2R[1,j,2,k]] += Elt(V[i,j,k,i]+V[j,i,i,k])*(-2);
-
-            rblocks[indmap_2R[2,j,1,k]] = Elt(V[i,k,i,j]+V[k,i,j,i]);
-            rblocks[indmap_2R[2,j,1,k]] += Elt(V[k,i,i,j]+V[i,k,j,i])*(-2);
-        end
-        push!(op_blocks[i],(lmask,B[Elt(1)],-(_pm_right)/2,rblocks[rmask],rmask))
-        
-        
-        lmask = fill(false,cnt+1); rmask = fill(false,cnt+1); lmask[1] = true;
-        rblocks = Vector{Elt}(undef,cnt+1);
-        for j in i+1:basis_size,k in j+1:basis_size
-            rmask[indmap_2R[1,j,2,k]] = true;
-            rmask[indmap_2R[2,j,1,k]] = true;
-            rblocks[indmap_2R[1,j,2,k]] = Elt(V[j,i,k,i]+V[i,j,i,k]);
-            rblocks[indmap_2R[2,j,1,k]] = Elt(V[i,k,i,j]+V[k,i,j,i])/(-1);
-        end
-        push!(op_blocks[i],(lmask,B[Elt(1)],ut_amap + _pm_right/2,rblocks[rmask],rmask))
-        
-    end
-    
-    @plansor LRLm_1[-1 -2;-3 -4] := (mp_f_1)[-1;1 2]*bm[2;3 -2]*τ[1 3;-3 -4]
-    @plansor LpLR_1[-1 -2;-3 -4] := (mp_f_1)[-1;1 2]*bp[1;-3 3]*τ[3 2;-4 -2]
-    @plansor RpLL[-1 -2;-3 -4] := mm_f[-1;1 2]*bp[2;3 -2]*τ[1 3;-3 -4]
-
-    # (i,j) ≤ half_basis_size
+    # 2 1 1
     for i in 1:half_basis_size,j in i+1:half_basis_size
         lmask = fill(false,cnt+1); rmask = fill(false,cnt+1);
         lmask[indmap_2L[1,i,1,i]] = true; rblock = Vector{Elt}(undef,cnt+1);
@@ -745,64 +584,58 @@ function fused_quantum_chemistry_hamiltonian(E0,K,V,Elt=Float64)
         push!(op_blocks[j],(lmask,B[Elt(1)],RpLL,rblock[rmask],rmask));
     end
     
-    println("2|1|1 $(sum(length.(op_blocks)))")
+    # 1 2 1
+    for j in half_basis_size:basis_size, k in j+1:basis_size
     
-    # 1|1|2
-    # (i,j) in indmap_2, 2 onsite
-    # (j,k) ≤ half_basis_size
-    for k in 3:half_basis_size
-
-        lmask = fill(false,cnt+1); rmask = fill(false,cnt+1); rmask[end] = true;
-        lblock = Vector{Elt}(undef,cnt+1);
-        for i in 1:k-1,j in i+1:k-1
-            lmask[indmap_2L[2,i,2,j]] = true;
-            lblock[indmap_2L[2,i,2,j]] = Elt(V[k,k,j,i]+V[k,k,i,j])
+        lmask = fill(false,cnt+1); rmask = fill(false,cnt+1); 
+        rblocks = Vector{Elt}(undef,cnt+1); rmask[indmap_1R[1,k]] = true;
+        for i in 1:j-1
+            lmask[indmap_1L[1,i]] = true;
+            rblocks[indmap_1L[1,i]] = Elt(V[k,i,j,j]+V[i,k,j,j])
         end
-        push!(op_blocks[k],(lmask,lblock[lmask],bpbp_ut,B[Elt(1)],rmask));
-        
-        lmask = fill(false,cnt+1); rmask = fill(false,cnt+1); rmask[end] = true;
-        lblock = Vector{Elt}(undef,cnt+1);
-        for i in 1:k-1,j in i+1:k-1
-            lmask[indmap_2L[1,i,1,j]] = true;
-            lblock[indmap_2L[1,i,1,j]] = Elt(V[i,j,k,k]+V[j,i,k,k])
+        push!(op_blocks[j],(lmask,rblocks[lmask],LRmm,B[Elt(1)],rmask));
+
+        lmask = fill(false,cnt+1); rmask = fill(false,cnt+1); 
+        rblocks = Vector{Elt}(undef,cnt+1); rmask[indmap_1R[2,k]] = true;
+        for i in 1:j-1
+            lmask[indmap_1L[2,i]] = true;
+            rblocks[indmap_1L[2,i]] = Elt(V[j,j,k,i]+V[j,j,i,k])
         end
-        push!(op_blocks[k],(lmask,lblock[lmask],bmbm_ut,B[Elt(1)],rmask));
-        
-        lmask = fill(false,cnt+1); rmask = fill(false,cnt+1); rmask[end] = true;
-        lblock = Vector{Elt}(undef,cnt+1);
-        for i in 1:k-1,j in i+1:k-1
-            lmask[indmap_2L[1,i,2,j]] = true;
-            lmask[indmap_2L[2,i,1,j]] = true;
+        push!(op_blocks[j],(lmask,rblocks[lmask],ppLR,B[Elt(1)],rmask));
 
-            lblock[indmap_2L[2,i,1,j]] = Elt(V[k,j,k,i]+V[j,k,i,k]);
-            lblock[indmap_2L[1,i,2,j]] = Elt(V[k,i,k,j]+V[i,k,j,k]);
-
-            lblock[indmap_2L[2,i,1,j]] += Elt(V[j,k,k,i]+V[k,j,i,k])*-2;
-            lblock[indmap_2L[1,i,2,j]] += Elt(V[i,k,k,j]+V[k,i,j,k])*-2;
+        lmask = fill(false,cnt+1); rmask = fill(false,cnt+1); 
+        rblocks = Vector{Elt}(undef,cnt+1); rmask[indmap_1R[2,k]] = true;
+        for i in 1:j-1
+            lmask[indmap_1L[1,i]] = true;
+            rblocks[indmap_1L[1,i]] = Elt(V[j,i,j,k]+V[i,j,k,j])
         end
-        push!(op_blocks[k],(lmask,lblock[lmask],-(_pm_left/2),B[Elt(1)],rmask));
+        push!(op_blocks[j],(lmask,rblocks[lmask],LpRm,B[Elt(1)],rmask));
 
-
-        lmask = fill(false,cnt+1); rmask = fill(false,cnt+1); rmask[end] = true;
-        lblock = Vector{Elt}(undef,cnt+1);
-        for i in 1:k-1,j in i+1:k-1
-            lmask[indmap_2L[1,i,2,j]] = true;
-            lmask[indmap_2L[2,i,1,j]] = true;
-
-            lblock[indmap_2L[2,i,1,j]] = -Elt(V[k,j,k,i]+V[j,k,i,k]);
-            lblock[indmap_2L[1,i,2,j]] = Elt(V[k,i,k,j]+V[i,k,j,k]);
-
+        lmask = fill(false,cnt+1); rmask = fill(false,cnt+1); 
+        rblocks = Vector{Elt}(undef,cnt+1); rmask[indmap_1R[2,k]] = true;
+        for i in 1:j-1
+            lmask[indmap_1L[1,i]] = true;
+            rblocks[indmap_1L[1,i]] = Elt(V[j,i,k,j]+V[i,j,j,k])
         end
-        push!(op_blocks[k],(lmask,lblock[lmask],bmbp_ut + _pm_left/2,B[Elt(1)],rmask));
+        push!(op_blocks[j],(lmask,rblocks[lmask],p_pm_p,B[Elt(1)],rmask));
 
-    end
+        lmask = fill(false,cnt+1); rmask = fill(false,cnt+1); 
+        rblocks = Vector{Elt}(undef,cnt+1); rmask[indmap_1R[1,k]] = true;
+        for i in 1:j-1
+            lmask[indmap_1L[2,i]] = true;
+            rblocks[indmap_1L[2,i]] = Elt(V[j,k,j,i]+V[k,j,i,j])
+        end
+        push!(op_blocks[j],(lmask,rblocks[lmask],RpLm,B[Elt(1)],rmask));
 
-    @plansor jimm[-1 -2;-3 -4] := iso_pp[-1;1]*ap[-3 2;3]*τ[2 1;4 -2]*conj(pp_f[-4;3 4])
-    @plansor ppji[-1 -2;-3 -4] := iso_mm[-1;1]*am[-3 2;3]*τ[2 1;4 -2]*conj(mm_f[-4;3 4])
-    @plansor jpim_1[-1 -2;-3 -4] := iso_mm[-1;1]*ap[-3 2;3]*τ[2 1;4 -2]*conj((pm_f_1)[-4;3 4])
-    @plansor ipjm_1[-1 -2;-3 -4] := iso_pp[-1;1]*τ[-3 1;2 3]*am[3 -2;4]*conj((pm_f_1)[-4;2 4])
-
-    # (j,k) ≥ half_basis_size
+        lmask = fill(false,cnt+1); rmask = fill(false,cnt+1); 
+        rblocks = Vector{Elt}(undef,cnt+1); rmask[indmap_1R[1,k]] = true;
+        for i in 1:j-1
+            lmask[indmap_1L[2,i]] = true;
+            rblocks[indmap_1L[2,i]] = Elt(V[j,k,i,j]+V[k,j,j,i])
+        end
+        push!(op_blocks[j],(lmask,rblocks[lmask],m_pm_m,B[Elt(1)],rmask));
+    end 
+    # 1 1 2
     for j in half_basis_size:basis_size, k in j+1:basis_size
         lmask = fill(false,cnt+1); rmask = fill(false,cnt+1);
         rblock = Vector{Elt}(undef,cnt+1); rmask[indmap_2R[2,k,2,k]] = true;
@@ -860,7 +693,139 @@ function fused_quantum_chemistry_hamiltonian(E0,K,V,Elt=Float64)
         push!(op_blocks[j],(lmask,rblock[lmask],p_am - ipjm_1,B[Elt(1)],rmask));    
     end
 
-    println("1|1|2 $(sum(length.(op_blocks)))")
+    # 1 1 2 + 2 2
+    for k in 2:half_basis_size
+        lmask = fill(false,cnt+1); rmask = fill(false,cnt+1); rmask[end] = true;
+        lblocks = Vector{Elt}(undef,cnt+1);
+        for i in 1:min(half_basis_size-1,k-1)
+            lmask[indmap_2L[1,i,1,i]] = true;
+            lblocks[indmap_2L[1,i,1,i]] = Elt(V[i,i,k,k])
+        end
+        for i in 1:k-1,j in i+1:k-1
+            lmask[indmap_2L[1,i,1,j]] = true;
+            lblocks[indmap_2L[1,i,1,j]] = Elt(V[i,j,k,k]+V[j,i,k,k])
+        end
+        push!(op_blocks[k],(lmask,lblocks[lmask],bmbm_ut,B[Elt(1)],rmask))
+
+
+        lmask = fill(false,cnt+1); rmask = fill(false,cnt+1); rmask[end] = true;
+        lblocks = Vector{Elt}(undef,cnt+1);
+        for i in 1:min(half_basis_size-1,k-1)
+            lmask[indmap_2L[2,i,2,i]] = true;
+            lblocks[indmap_2L[2,i,2,i]] = Elt(V[k,k,i,i])
+        end
+        for i in 1:k-1,j in i+1:k-1
+            lmask[indmap_2L[2,i,2,j]] = true;
+            lblocks[indmap_2L[2,i,2,j]] = Elt(V[k,k,j,i]+V[k,k,i,j])
+        end
+        push!(op_blocks[k],(lmask,lblocks[lmask],bpbp_ut,B[Elt(1)],rmask))
+
+
+        lmask = fill(false,cnt+1); rmask = fill(false,cnt+1); rmask[end] = true;
+        lblocks = Vector{Elt}(undef,cnt+1);
+        for i in 1:min(half_basis_size-1,k-1)
+            lmask[indmap_2L[2,i,1,i]] = true;
+            lblocks[indmap_2L[2,i,1,i]] = Elt(V[k,i,k,i]+V[i,k,i,k])
+        end
+        push!(op_blocks[k],(lmask,lblocks[lmask],bpbm_ut,B[Elt(1)],rmask))
+
+        lmask = fill(false,cnt+1); rmask = fill(false,cnt+1); rmask[end] = true;
+        lblocks = Vector{Elt}(undef,cnt+1);
+        for i in 1:min(half_basis_size-1,k-1)
+            lmask[indmap_2L[2,i,1,i]] = true;
+            lblocks[indmap_2L[2,i,1,i]] = Elt(V[k,i,i,k]+V[i,k,k,i])
+        end
+        for i in 1:k-1,j in i+1:k-1
+            lmask[indmap_2L[1,i,2,j]] = true;
+            lmask[indmap_2L[2,i,1,j]] = true;
+
+            lblocks[indmap_2L[2,i,1,j]] = -Elt(V[k,j,k,i]+V[j,k,i,k]);
+
+            lblocks[indmap_2L[2,i,1,j]] += Elt(V[j,k,k,i]+V[k,j,i,k]);
+            lblocks[indmap_2L[1,i,2,j]] = Elt(V[i,k,k,j]+V[k,i,j,k]);
+        end
+        push!(op_blocks[k],(lmask,lblocks[lmask],_pm_left,B[Elt(1)],rmask))
+
+        lmask = fill(false,cnt+1); rmask = fill(false,cnt+1); rmask[end] = true;
+        lblock = Vector{Elt}(undef,cnt+1);
+        for i in 1:k-1,j in i+1:k-1
+            lmask[indmap_2L[1,i,2,j]] = true;
+            lmask[indmap_2L[2,i,1,j]] = true;
+
+            lblock[indmap_2L[2,i,1,j]] = -Elt(V[k,j,k,i]+V[j,k,i,k]);
+            lblock[indmap_2L[1,i,2,j]] = Elt(V[k,i,k,j]+V[i,k,j,k]);
+
+        end
+        push!(op_blocks[k],(lmask,lblock[lmask],bmbp_ut ,B[Elt(1)],rmask));
+
+    end
+    
+    # 2 1 1 + 2 2
+    for i in half_basis_size:basis_size
+        lmask = fill(false,cnt+1); rmask = fill(false,cnt+1); lmask[1] = true;
+        rblocks = Vector{Elt}(undef,cnt+1);
+        for j in i+1:basis_size
+            rmask[indmap_2R[1,j,1,j]] = true;
+            rblocks[indmap_2R[1,j,1,j]] = Elt(V[j,j,i,i])
+        end
+        for j in i+1:basis_size,k in j+1:basis_size
+            rmask[indmap_2R[1,j,1,k]] = true;
+            rblocks[indmap_2R[1,j,1,k]] = Elt(V[j,k,i,i]+V[k,j,i,i]);
+        end
+        push!(op_blocks[i],(lmask,B[Elt(1)],ut_amam,rblocks[rmask],rmask))
+        
+
+        lmask = fill(false,cnt+1); rmask = fill(false,cnt+1); lmask[1] = true;
+        rblocks = Vector{Elt}(undef,cnt+1);
+        for j in i+1:basis_size
+            rmask[indmap_2R[2,j,2,j]] = true;
+            rblocks[indmap_2R[2,j,2,j]] = Elt(V[i,i,j,j])
+        end
+        for j in i+1:basis_size,k in j+1:basis_size
+            rmask[indmap_2R[2,j,2,k]] = true;
+            rblocks[indmap_2R[2,j,2,k]] = Elt(V[i,i,j,k]+V[i,i,k,j]);
+        end
+        push!(op_blocks[i],(lmask,B[Elt(1)],ut_apap,rblocks[rmask],rmask))
+
+        lmask = fill(false,cnt+1); rmask = fill(false,cnt+1); lmask[1] = true;
+        rblocks = Vector{Elt}(undef,cnt+1);
+        for j in i+1:basis_size
+            rmask[indmap_2R[2,j,1,j]] = true;
+            rblocks[indmap_2R[2,j,1,j]] = Elt(V[i,j,i,j]+V[j,i,j,i])
+        end
+        push!(op_blocks[i],(lmask,B[Elt(1)],ut_apam,rblocks[rmask],rmask))
+
+        lmask = fill(false,cnt+1); rmask = fill(false,cnt+1); lmask[1] = true;
+        rblocks = Vector{Elt}(undef,cnt+1);
+        for j in i+1:basis_size,k in j+1:basis_size            
+            rmask[indmap_2R[1,j,2,k]] = true;
+            rmask[indmap_2R[2,j,1,k]] = true;
+            rblocks[indmap_2R[1,j,2,k]] = 
+            rblocks[indmap_2R[1,j,2,k]] = Elt(V[i,j,k,i]+V[j,i,i,k]);
+
+            rblocks[indmap_2R[2,j,1,k]] = -Elt(V[i,k,i,j]+V[k,i,j,i]);
+            rblocks[indmap_2R[2,j,1,k]] += Elt(V[k,i,i,j]+V[i,k,j,i]);
+        end
+        for j in i+1:basis_size
+            rmask[indmap_2R[2,j,1,j]] = true;
+            rblocks[indmap_2R[2,j,1,j]] = Elt(V[j,i,i,j]+V[i,j,j,i])
+        end
+        push!(op_blocks[i],(lmask,B[Elt(1)],_pm_right,rblocks[rmask],rmask))
+
+
+        lmask = fill(false,cnt+1); rmask = fill(false,cnt+1); lmask[1] = true;
+        rblocks = Vector{Elt}(undef,cnt+1);
+        for j in i+1:basis_size,k in j+1:basis_size
+            rmask[indmap_2R[1,j,2,k]] = true;
+            rmask[indmap_2R[2,j,1,k]] = true;
+            rblocks[indmap_2R[1,j,2,k]] = Elt(V[j,i,k,i]+V[i,j,i,k]);
+            rblocks[indmap_2R[2,j,1,k]] = Elt(V[i,k,i,j]+V[k,i,j,i])/(-1);
+        end
+        push!(op_blocks[i],(lmask,B[Elt(1)],ut_amap,rblocks[rmask],rmask))
+    end
+    
+    println("2|2 $(sum(length.(op_blocks)))")
+
     
     # 1|1|1|1
     # (i,j) in indmap_2, 1 in indmap_4, 1 onsite
