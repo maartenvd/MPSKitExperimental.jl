@@ -133,7 +133,6 @@ function fused_quantum_chemistry_hamiltonian(E0,K,V,Elt=Float64)
 
     # fill indmap_1L and indmap_1R
     ut = Tensor(ones,oneunit(psp));
-    @plansor ut_ai_ut[-1 -2;-3 -4] := ut[-1]*ai[-2;-3]*conj(ut[-4])
     @plansor ut_ap[-1 -2;-3 -4] := ut[-1]*ap[-3 -2;-4];
     @plansor ut_am[-1 -2;-3 -4] := ut[-1]*am[-3 -2;-4];
     @plansor bp_ut[-1 -2;-3 -4] := bp[-1;-3 -2]*conj(ut[-4]);
@@ -272,7 +271,6 @@ function fused_quantum_chemistry_hamiltonian(E0,K,V,Elt=Float64)
     # indmap_2 disconnected part
     iso_pp = isomorphism(_lastspace(ap)',_lastspace(ap)');
     iso_mm = isomorphism(_lastspace(am)',_lastspace(am)');
-
     @plansor p_ai_p[-1 -2;-3 -4] := iso_pp[-1;1]*τ[1 2;-3 -4]*ai[-2;2]
     @plansor m_ai_m[-1 -2;-3 -4] := iso_mm[-1;1]*τ[1 2;-3 -4]*ai[-2;2]
     @plansor p_pm_p[-1 -2;-3 -4] := iso_pp[-1;1]*τ[1 2;-3 -4]*h_pm[-2;2]
@@ -367,8 +365,6 @@ function fused_quantum_chemistry_hamiltonian(E0,K,V,Elt=Float64)
 
     #----------------
     
-    ut_hpm_ut = add_util_leg(h_pm)
-
     println("offset $(sum(length.(op_blocks)))")
     onsite = fill(add_util_leg(h_pm)*0,basis_size);
     for i in 1:basis_size
@@ -468,6 +464,7 @@ function fused_quantum_chemistry_hamiltonian(E0,K,V,Elt=Float64)
 
     LpmR = p_pm_p
     RpmL = m_pm_m
+
 
     for i in 1:half_basis_size,j in i+1:half_basis_size-1
 
@@ -579,7 +576,7 @@ function fused_quantum_chemistry_hamiltonian(E0,K,V,Elt=Float64)
     __pp = bpbp_ut
     _p_m = bpbm_ut
     @plansor _pm_left[-1 -2;-3 -4] := (mp_f*Lmap_apam_to_pm)[-1]*h_pm[-2;-3]*conj(ut[-4])
-    
+    _pm_ = _pm_left
     for j in 2:half_basis_size
         lmask = fill(false,cnt+1); rmask = fill(false,cnt+1); rmask[end] = true;
         lblocks = Vector{Elt}(undef,cnt+1);
@@ -612,14 +609,14 @@ function fused_quantum_chemistry_hamiltonian(E0,K,V,Elt=Float64)
             lmask[indmap_2L[2,i,1,i]] = true;
             lblocks[indmap_2L[2,i,1,i]] = Elt(V[j,i,i,j]+V[i,j,j,i])
         end
-        push!(op_blocks[j],(lmask,lblocks[lmask],_pm_left,B[Elt(1)],rmask))
+        push!(op_blocks[j],(lmask,lblocks[lmask],_pm_,B[Elt(1)],rmask))
     end
-
     __mm = ut_amam;
     __pp = ut_apap;
     _p_m = ut_apam
     @plansor _p_m[-1 -2;-3 -4] := ut[-1]*ap[-3 1;2]*am[1 -2;3]*conj(pm_f[-4;2 3])
     @plansor _pm_[-1 -2;-3 -4] := ut[-1]*h_pm[-2;-3]*(transpose(Rmap_bpbm_to_pm*pm_f',(1,)))[-4]
+    _pm_right = _pm_
 
     for i in half_basis_size:basis_size
         lmask = fill(false,cnt+1); rmask = fill(false,cnt+1); lmask[1] = true;
@@ -661,7 +658,6 @@ function fused_quantum_chemistry_hamiltonian(E0,K,V,Elt=Float64)
     pp__ = ut_apap
     jpkm_1 = -(_pm_)/2
     jpkm_2 = ut_amap + _pm_/2
-
     # (i,j) ≥ half_basis_size
     for i in half_basis_size:basis_size
 
@@ -713,7 +709,7 @@ function fused_quantum_chemistry_hamiltonian(E0,K,V,Elt=Float64)
     @plansor LpLR_1[-1 -2;-3 -4] := (mp_f_1)[-1;1 2]*bp[1;-3 3]*τ[3 2;-4 -2]
     LpLR_2 = bp_m - LpLR_1
     @plansor RpLL[-1 -2;-3 -4] := mm_f[-1;1 2]*bp[2;3 -2]*τ[1 3;-3 -4]
-    
+
     # (i,j) ≤ half_basis_size
     for i in 1:half_basis_size,j in i+1:half_basis_size
         lmask = fill(false,cnt+1); rmask = fill(false,cnt+1);
@@ -894,6 +890,7 @@ function fused_quantum_chemistry_hamiltonian(E0,K,V,Elt=Float64)
     
     # 1|1|1|1
     # (i,j) in indmap_2, 1 in indmap_4, 1 onsite
+
     pjiR = -2*LpLR_1
     Rjim = -2*LRLm_1
     kjil = -2*jpim_1
@@ -901,8 +898,8 @@ function fused_quantum_chemistry_hamiltonian(E0,K,V,Elt=Float64)
     @plansor jimR_1[-1 -2;-3 -4] := pp_f_1[-1;1 2]*τ[3 2;-4 -2]*bm[1;-3 3]
     jimR_2 = bm_m - jimR_1;
     jpiR_2 = bp_m - LpLR_1;
-    jRim_2 = LRLm_1 - bm_p;
-    Rpji_1 = bp_p + RpLL;
+    jRim_2 = LRLm_1 - bm_p;    
+    Rpji_1 =   (RpLL+bp_p)/2;
     Rpji_2 =   (RpLL-bp_p)/2;
     jikl_1 = (p_ap+jimm)/2
     jikl_2 =  (p_ap-jimm)/2
@@ -1254,12 +1251,14 @@ function fused_quantum_chemistry_hamiltonian(E0,K,V,Elt=Float64)
     println("1|1|1|1 (3,1) $(sum(length.(op_blocks)))")
 
     # loc == half_basis_size:
+    # loc == half_basis_size:
     @plansor jkil_2[-1 -2;-3 -4] := mp_f_2[-1;1 2]*ai[3;-3]*τ[3 1;4 5]*τ[5 2;6 -2]*conj(mp_f_2[-4;4 6])
     kjil =   2*(jkil_2-pm_ai_pm)
     @plansor jikl_1[-1 -2;-3 -4] := pp_f_1[-1;1 2]*ai[3;-3]*τ[3 1;4 5]*τ[5 2;6 -2]*conj(pp_f_1[-4;4 6])
     jikl_2 = pp_ai_pp - jikl_1
     @plansor lkij_1[-1 -2;-3 -4] := mm_f_1[-1;1 2]*ai[3;-3]*τ[3 1;4 5]*τ[5 2;6 -2]*conj(mm_f_1[-4;4 6])
     lkij_2 = mm_ai_mm- lkij_1
+    
     
     for k in half_basis_size+1:basis_size, l in k+1:basis_size
         lmask = fill(false,cnt+1); rmask = fill(false,cnt+1); rmask[indmap_2R[1,k,2,l]] = true;
@@ -1346,10 +1345,10 @@ function fused_quantum_chemistry_hamiltonian(E0,K,V,Elt=Float64)
         
     end
     
+    
     jkki = kjil
     jkik_2 = -jkil_2
     jiki_2 = -jkik_2
-    
     for k in half_basis_size+1:basis_size
 
         lmask = fill(false,cnt+1); rmask = fill(false,cnt+1);
