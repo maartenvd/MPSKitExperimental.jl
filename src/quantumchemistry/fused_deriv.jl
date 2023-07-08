@@ -234,7 +234,7 @@ function MPSKit.∂∂AC2(pos::Int,mps,ham::FusedMPOHamiltonian{E,O,Sp},cache) w
         cur_right_blocks = blocked_right_blocks[rights];
 
         
-        d = fill(0.0+0im,length(lefts),length(rights));
+        d = fill(zero(E),length(lefts),length(rights));
         for (i,(l,rblock,rmask)) in enumerate(cur_left_blocks),
             (j,(lmask,lblock,r)) in enumerate(cur_right_blocks)
             
