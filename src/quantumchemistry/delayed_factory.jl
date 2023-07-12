@@ -20,7 +20,7 @@ function fast_axpy!(a,x,y)
 
 end
 # creates an uninitialized tensormap at a later time
-struct DelayedFact{S,N₁,N₂,F₁,F₂,I,A}
+struct DelayedFact{S,N₁,N₂,F₁,F₂,I,A,B}
     cod::ProductSpace{S,N₁}
     dom::ProductSpace{S,N₂}
     
@@ -31,6 +31,8 @@ struct DelayedFact{S,N₁,N₂,F₁,F₂,I,A}
     coldims::SectorDict{I, Int}
 
     storage::A
+
+    recyclers::ConcurrentStack{B}
 end
 
 
@@ -38,7 +40,10 @@ function DelayedFactType(S,storage,N₁,N₂)
     I = sectortype(S);
     F₁ = fusiontreetype(I, N₁)
     F₂ = fusiontreetype(I, N₂)
-    DelayedFact{S,N₁,N₂,F₁,F₂,I,typeof(storage)}
+
+    
+    B = TensorMap{S, N₁, N₂, I, SectorDict{I,storage}, F₁, F₂}
+    DelayedFact{S,N₁,N₂,F₁,F₂,I,typeof(storage),B}
 end
 function DelayedFact(homsp,storage)
     S = spacetype(homsp);
@@ -52,22 +57,30 @@ function DelayedFact(homsp,storage)
     F₂ = fusiontreetype(I, N₂)
 
     T = tensormaptype(S,N₁,N₂,storage);
-    DelayedFact(codomain(homsp),domain(homsp),rowr_src,colr_src,rowdims_src,coldims_src,storage)
+    DelayedFact(codomain(homsp),domain(homsp),rowr_src,colr_src,rowdims_src,coldims_src,storage,ConcurrentStack{T}())
 end
 
-function (fact::DelayedFact{S,N₁,N₂,F₁,F₂,I,A})() where {S,N₁,N₂,F₁,F₂,I,A}
+function free!(d::DelayedFact,t)
+    push!(d.recyclers,t)
+end
 
-    # allocate the output tensormap
-    keys = I[];
-    vals = fact.storage[];
-    for (c,rd) in fact.rowdims
-        cd = fact.coldims[c];
-        push!(keys,c);
-        push!(vals,fact.storage(undef,rd,cd);)
+function (fact::DelayedFact{S,N₁,N₂,F₁,F₂,I,A,B})() where {S,N₁,N₂,F₁,F₂,I,A,B}
+    m = maybepop!(fact.recyclers);
+    if m isa Some
+        return something(m)::B
+    else
+        # allocate the output tensormap
+        keys = I[];
+        vals = fact.storage[];
+        for (c,rd) in fact.rowdims
+            cd = fact.coldims[c];
+            push!(keys,c);
+            push!(vals,fact.storage(undef,rd,cd);)
+        end
+        data = SectorDict{I,fact.storage}(keys,vals);
+
+        TensorMap{S, N₁, N₂, I, SectorDict{I,fact.storage}, F₁, F₂}(data, fact.cod, fact.dom, fact.rowr, fact.colr);
     end
-    data = SectorDict{I,fact.storage}(keys,vals);
-
-    TensorMap{S, N₁, N₂, I, SectorDict{I,fact.storage}, F₁, F₂}(data, fact.cod, fact.dom, fact.rowr, fact.colr);
 end
 
 function calc_rowr_color(I,codom,dom)

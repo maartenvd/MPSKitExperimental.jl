@@ -109,3 +109,7 @@ function generate_table(elt,sp_src,rowr_src,colr_src,sp_dst,rowr_dst,colr_dst,p1
 
     table
 end
+
+function free!(d::TransposeFact,t)
+    free!(d.delayed,t)
+end

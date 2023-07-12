@@ -1,6 +1,6 @@
 module MPSKitExperimental
     using TensorKit,MPSKit,TensorOperations,KrylovKit,Strided
-    using FLoops,Transducers,FoldsThreads
+    using FLoops,Transducers,FoldsThreads, ConcurrentCollections
     using Base.Threads, LinearAlgebra
 
     export LeftGaugedMW, AssymptoticScatter,extend,partialdot,s_proj,projdown

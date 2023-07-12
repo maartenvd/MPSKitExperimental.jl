@@ -112,9 +112,12 @@ function MPSKit.transfer_left(v::Vector,O::FusedSparseBlock,A,Ab=A)
         l_perm = temp_0(l);
         lAb = temp_1();
         mul!(lAb,Ab_flipped,l_perm);
+        free!(temp_0,l_perm);
+
 
         lAb_perm = temp_2(lAb);
-        
+        free!(temp_1,lAb)
+
         lAbe = temp_3();
         if e isa AbstractTensorMap
             mul!(lAbe,lAb_perm,e);
@@ -123,10 +126,14 @@ function MPSKit.transfer_left(v::Vector,O::FusedSparseBlock,A,Ab=A)
             mul!(lAbe,e,lAbe);
         end
 
+        free!(temp_2,lAb_perm)
+
         lAbe_perm = temp_4(lAbe);
+        free!(temp_3,lAbe)
 
         nl = temp_5();
         mul!(nl,lAbe_perm,A);
+        free!(temp_4,lAbe_perm)
 
         # expand r
         toret = map(rblock) do r
@@ -137,7 +144,7 @@ function MPSKit.transfer_left(v::Vector,O::FusedSparseBlock,A,Ab=A)
     end
 
     mapped = tcollect(mapper,fact_block)#,basesize=1)
-    
+
     out = Vector{eltype(v)}(undef,length(O.imspaces))
     isassigned = fill(false,length(O.imspaces));
 
@@ -179,7 +186,7 @@ function MPSKit.transfer_right(v::Vector,O::FusedSparseBlock,A,Ab=A)
     mvaltype_2_1 = DelayedFactType(S,storage,2,1);
 
     tfactory_1_2 = Dict{Any,tvaltype_1_2}(); # transpose r
-    mfactory_1_2 = Dict{Any,mvaltype_2_2}(); # multiply A with r
+    #mfactory_1_2 = Dict{Any,mvaltype_2_2}(); # multiply A with r
     tfactory_2_2 = Dict{Any,tvaltype_2_2}();
     mfactory_2_2 = Dict{Any,mvaltype_2_2}();
     mfactory_2_1 = Dict{Any,mvaltype_2_1}();
@@ -247,6 +254,8 @@ function MPSKit.transfer_right(v::Vector,O::FusedSparseBlock,A,Ab=A)
 
         ar = mfactory_2_2[codomain(A)←domain(rt)]()
         mul!(ar,A,rt);
+        
+        free!(tfactory_1_2[(codomain(r) ← domain(r),(1,),(3,2))],rt)
 
         ar_t = tfactory_2_2[(codomain(ar)←domain(ar),(2,4),(1,3))](ar)
         if e isa AbstractTensorMap
@@ -258,10 +267,14 @@ function MPSKit.transfer_right(v::Vector,O::FusedSparseBlock,A,Ab=A)
             mul!(ear,e,ear);
         end
 
+        free!(mfactory_2_2[codomain(A)←domain(rt)],ar);
+
         ear_t = tfactory_2_2[(codomain(ear)←domain(ear),(3,1),(4,2))](ear);
-        
+        free!(tfactory_2_2[(codomain(ar)←domain(ar),(2,4),(1,3))],ar_t)
+
         nr = mfactory_2_1[codomain(ear_t)←domain(Ab_flipped)]()
         mul!(nr,ear_t,Ab_flipped)
+        free!(tfactory_2_2[(codomain(ear)←domain(ear),(3,1),(4,2))],ear_t)
 
         # expand r
         toret = map(lblock) do t

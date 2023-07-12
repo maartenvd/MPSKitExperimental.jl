@@ -15,15 +15,6 @@ find_left_map(o_1,o_2) = (o_2*o_1')*pinv(o_1*o_1');
 # o_1 * x = o_2
 find_right_map(o_1,o_2) = pinv(o_1'*o_1)*o_1'*o_2
 
-function sfind_left_map(args...)
-    t = find_left_map(args...);
-    tr(t)/tr(one(t))
-end
-function sfind_right_map(args...)
-    t = find_right_map(args...);
-    tr(t)/tr(one(t))
-end
-
 function fused_quantum_chemistry_hamiltonian(E0,K,V,Elt=Float64)
     basis_size = size(K,1);
     half_basis_size = Int(ceil((basis_size+1)/2));

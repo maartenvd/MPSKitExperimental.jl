@@ -182,6 +182,8 @@ function MPSKit.∂∂AC2(pos::Int,mps,ham::FusedMPOHamiltonian{E,O,Sp},cache) w
         tl = mfactory_2_3[key_2_3]();
         mul!(tl,l_transposed,t_e);
         
+        free!(tfactory_2_1[key_2_1],l_transposed)
+
         (tl,rblock,rmask)
     end
     
@@ -205,6 +207,8 @@ function MPSKit.∂∂AC2(pos::Int,mps,ham::FusedMPOHamiltonian{E,O,Sp},cache) w
         blocked = mfactory_3_2[codomain(et)←domain(rt)]();
         mul!(blocked,et,rt);
         
+        free!(tfactory_1_2[(codomain(r)←domain(r),(2,),(1,3))],rt)
+
         (lmask,lblock,blocked)
     end
 
@@ -213,7 +217,6 @@ function MPSKit.∂∂AC2(pos::Int,mps,ham::FusedMPOHamiltonian{E,O,Sp},cache) w
     filter!(blocked_right_blocks) do (lmask,lblock,r)
         !isempty(lblock) && norm(r)>1e-12
     end
-
 
     left_group = Dict();
     right_group = Dict();
@@ -313,25 +316,37 @@ function MPSKit.∂∂AC2(pos::Int,mps,ham::FusedMPOHamiltonian{E,O,Sp},cache) w
     end
     
     blocks = reduce(vcat,tcollect(mapper,intersect(keys(right_group),keys(left_group))))
-    
     fused_∂∂AC2(convert(Vector{typeof(blocks[1])},blocks))
 end
 
-function (h::fused_∂∂AC2)(x)
-    
-    @floop for (l,temp,r,temp_trans) in h.blocks
-        @init temp_3 = fast_similar(x);
 
-        temp_1 = temp();
-        mul!(temp_1,l,x)
+function _inner_ac2!(toret,x,l,temp,r,temp_trans)
+    temp_1 = temp();
+    mul!(temp_1,l,x);
+    temp_2 = temp_trans(temp_1);
+    free!(temp,temp_1)
+    mul!(toret,temp_2,r,true,true)
+    free!(temp_trans,temp_2)
+end
 
-        temp_2 = temp_trans(temp_1);
-        mul!(temp_3,temp_2,r)
-
-        @reduce() do (toret = zero(temp_3); temp_3)
-            fast_axpy!(true,temp_3,toret);
+function _reduce_ac2(blocks,x,basesize)
+    if length(blocks) <= basesize
+        toret = zero(x)
+        for (l,temp,r,temp_trans) in blocks
+            _inner_ac2!(toret,x,l,temp,r,temp_trans)
         end
-    end
 
-    toret
+        return toret
+    else
+
+        spl = Int(ceil(length(blocks)/2));
+        t = @Threads.spawn _reduce_ac2(blocks[1:spl],x,basesize)
+        toret = _reduce_ac2(view(blocks,spl+1:length(blocks)),x,basesize)
+        fast_axpy!(true,fetch(t),toret)
+        return toret
+    end
+end
+
+function (h::fused_∂∂AC2)(x)
+    _reduce_ac2(h.blocks,x,ceil(length(h.blocks)/nthreads()))
 end
