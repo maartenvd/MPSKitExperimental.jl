@@ -7,45 +7,127 @@ function MPSKit.∂∂AC(pos::Int,mps,ham::FusedMPOHamiltonian,cache)
     le = leftenv(cache,pos,mps);
     re = rightenv(cache,pos,mps);
 
+
+
+    # tranpose factories:
+    S = spacetype(eltype(mps));
+    storage = storagetype(eltype(mps));
+
+    mvaltype_2_3 = DelayedFactType(S,storage,2,3);
+    mvaltype_3_2 = DelayedFactType(S,storage,3,2);
+    mvaltype_3_1 = DelayedFactType(S,storage,3,1);
+    tvaltype_2_1 = TransposeFactType(S,storage,2,1);
+    tvaltype_3_2 = TransposeFactType(S,storage,3,2);
+    tvaltype_2_2 = TransposeFactType(S,storage,2,2);
+
+    
+    mfactory_2_3 = Dict{Any,mvaltype_2_3}();
+    mfactory_3_2 = Dict{Any,mvaltype_3_2}();
+    mfactory_3_1 = Dict{Any,mvaltype_3_1}();
+    tfactory_2_1 = Dict{Any,tvaltype_2_1}();
+    tfactory_3_2 = Dict{Any,tvaltype_3_2}();
+    tfactory_2_2 = Dict{Any,tvaltype_2_2}();
+
+    #---- create factories
+    promise_creation = Dict{Any,Any}();
+
+    let 
+        
+        for (lmask,lblock,e,rblock,rmask) in opp.blocks
+            l = le[lmask][1];
+            r = re[rmask][1];
+
+            homsp_2_1_2_1 = codomain(l)←domain(l);
+            key_2_1_2_1 = (homsp_2_1_2_1,(3,1),(2,));
+
+            if !(key_2_1_2_1 in keys(promise_creation))
+                promise_creation[key_2_1_2_1] = @Threads.spawn (tfactory_2_1,TransposeFact(homsp_2_1_2_1,storage,(3,1),(2,)))
+            end
+
+            key_2_3_2_3 = space(l,3)*space(l,1)←space(e,3)'*space(e,4)'*space(e,2)';
+            key_2_3_3_2 = (key_2_3_2_3,(2,5,4),(1,3));
+            if !(key_2_3_3_2 in keys(promise_creation))
+                t_t = @Threads.spawn (mfactory_2_3,DelayedFact(key_2_3_2_3,storage))
+                promise_creation[key_2_3_2_3] = t_t
+                promise_creation[key_2_3_3_2] = @Threads.spawn (tfactory_3_2,TransposeFact(fetch(t_t)[2],(2,5,4),(1,3)))
+            end
+
+            p1 = opp.pspace;
+            v1 = left_virtualspace(mps,pos-1);
+            v2 = right_virtualspace(mps,pos);
+
+            homsp_mult = v1*p1*space(e,4) ← v2
+            if !(homsp_mult in keys(promise_creation))
+                t_tt = @Threads.spawn (mfactory_3_1,DelayedFact(homsp_mult,storage))
+                promise_creation[homsp_mult] = t_tt
+                promise_creation[(homsp_mult,(1,2),(4,3))] = @Threads.spawn (tfactory_2_2,TransposeFact(fetch(t_tt)[2],(1,2),(4,3)))
+            end
+
+        end
+
+        for (k,t) in promise_creation
+            (d,v) = fetch(t)
+            Base.setindex!(d,v,k);
+        end
+    end
+
     process_blocks = Map() do (lmask,lblock,e,rblock,rmask)
         cl = le[lmask];
         cr = re[rmask];
 
-        l = transpose(cl[1],(3,1),(2,))*lblock[1];
+        
+        l = rmul!(fast_copy(cl[1]),lblock[1])
         for i in 2:length(cl)
-            TensorKit.planar_add!(lblock[i],cl[i],true,l,(3,1),(2,));
+            l = fast_axpy!(lblock[i],cl[i],l);
         end
-        nl = transpose(l,(2,3),(1,));
 
-        
-        r = rblock[1]*transpose(cr[1],(2,),(1,3));
+        r = rmul!(fast_copy(cr[1]),rblock[1])
         for i in 2:length(rblock)
-            TensorKit.planar_add!(rblock[i],cr[i],true,r,(2,),(1,3))
-        end
-        nr = transpose(r,(2,1),(3,));
-        
+            r = fast_axpy!(rblock[i],cr[i],r);
+        end        
 
-        (nl,e,nr)
+        e_t = transpose(e,(1,),(3,4,2));
+
+        l_tf = tfactory_2_1[(codomain(l)←domain(l),(3,1),(2,))];
+        l_t = l_tf(l);
+
+        le_tf = mfactory_2_3[codomain(l_t)←domain(e_t)]
+
+        le_t = le_tf();
+        mul!(le_t,l_t,e_t);
+        free!(l_tf,l_t);
+
+        tle_f = tfactory_3_2[(codomain(le_t)←domain(le_t),(2,5,4),(1,3))];
+        tle = tle_f(le_t);
+        free!(le_tf,le_t);
+
+        temp_mul = mfactory_3_1[codomain(tle)←space(r,1)];
+        temp_trans = tfactory_2_2[(codomain(tle)←space(r,1),(1,2),(4,3))]
+
+
+        (tle,temp_mul,temp_trans,r)
     end
 
-    blocks = tcollect(process_blocks,opp.blocks)#,basesize=1);
-    
-    filter!(blocks) do (l,e,r)
-        !(norm(l)<1e-12 || norm(r)<1e-12)
+
+    blocks = tcollect(process_blocks,opp.blocks)
+
+    filter!(blocks) do (tle,temp_mul,temp_trans,r)
+        !(norm(tle)<1e-12 || norm(r)<1e-12)
     end
     
     fused_∂∂AC(blocks)
 end
 
 function (h::fused_∂∂AC)(x)
-    @floop WorkStealingEx() for (l,e,r) in h.blocks
+    @floop for (tle,temp_mul,temp_trans,r) in h.blocks
         @init t = similar(x)
-        if e isa AbstractTensorMap
-            @plansor t[-1 -2;-3] = l[-1 5;4]*x[4 2;1]*e[5 -2;2 3]*r[1 3;-3]
-        else
-            @plansor t[-1 -2;-3] = l[-1 5;4]*x[4 6;1]*τ[6 5;7 -2]*r[1 7;-3]
-            lmul!(e,t);
-        end
+
+        t1 = temp_mul();
+        mul!(t1,tle,x)
+        t2 = temp_trans(t1);
+        free!(temp_mul,t1);
+        mul!(t,t2,r);
+        free!(temp_trans,t2);
 
         @reduce() do (toret = zero(x); t)
             fast_axpy!(true,t,toret);
@@ -187,7 +269,7 @@ function MPSKit.∂∂AC2(pos::Int,mps,ham::FusedMPOHamiltonian{E,O,Sp},cache) w
         (tl,rblock,rmask)
     end
     
-    blocked_left_blocks = tcollect(process_left_blocks,opp1.blocks)#,basesize=1);
+    blocked_left_blocks = tcollect(process_left_blocks,opp1.blocks)
 
     filter!(blocked_left_blocks) do (l,rblock,rmask)
         norm(l)>1e-12 && !isempty(rblock)
@@ -212,7 +294,7 @@ function MPSKit.∂∂AC2(pos::Int,mps,ham::FusedMPOHamiltonian{E,O,Sp},cache) w
         (lmask,lblock,blocked)
     end
 
-    blocked_right_blocks = tcollect(process_right_blocks,opp2.blocks)#,basesize=1);
+    blocked_right_blocks = tcollect(process_right_blocks,opp2.blocks)
 
     filter!(blocked_right_blocks) do (lmask,lblock,r)
         !isempty(lblock) && norm(r)>1e-12
