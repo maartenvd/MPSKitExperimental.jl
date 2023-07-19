@@ -1,5 +1,5 @@
 module MPSKitExperimental
-    using TensorKit,MPSKit,TensorOperations,KrylovKit,Strided
+    using TensorKit,MPSKit,TensorOperations,KrylovKit,Strided, OptimKit, TensorKitManifolds
     using FLoops,Transducers,FoldsThreads, ConcurrentCollections
     using Base.Threads, LinearAlgebra
 
@@ -37,6 +37,9 @@ module MPSKitExperimental
     include("quantumchemistry/disk_backed_envs.jl")
     include("quantumchemistry/disk_backed_envs_manual.jl") # alternative to the diskmanager is to manually write data to disk
     
+    using MPSKit:GrassmannMPS
+    export CASSCF_Ham, GrassmannSCF;
+    include("quantumchemistry/grassmann_scf.jl")
     
 
 end

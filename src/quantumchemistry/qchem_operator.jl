@@ -15,10 +15,10 @@ find_left_map(o_1,o_2) = (o_2*o_1')*pinv(o_1*o_1');
 # o_1 * x = o_2
 find_right_map(o_1,o_2) = pinv(o_1'*o_1)*o_1'*o_2
 
-function fused_quantum_chemistry_hamiltonian(E0,K,V,Elt=Float64)
+function fused_quantum_chemistry_hamiltonian(E0,K,V,Elt=eltype(V))
     basis_size = size(K,1);
     half_basis_size = Int(ceil((basis_size+1)/2));
-    @show half_basis_size
+    #@show half_basis_size
     # the phsyical space
     psp = Vect[(Irrep[U₁]⊠Irrep[SU₂] ⊠ FermionParity)]((0,0,0)=>1, (1,1//2,1)=>1, (2,0,0)=>1);
 
@@ -42,11 +42,7 @@ function fused_quantum_chemistry_hamiltonian(E0,K,V,Elt=Float64)
     ap = ap*flipcor';
 
     @plansor b_derp[-1 -2;-3] := bp[1;2 -2]*τ[-3 -1;2 1]
-    Lmap_ap_to_bp = find_right_map(ap,b_derp);
     @plansor b_derp[-1 -2;-3] := bm[1;2 -2]*τ[-3 -1;2 1]
-    Lmap_am_to_bm = find_right_map(am,b_derp);
-    Rmap_bp_to_ap = transpose(Lmap_am_to_bm',(2,),(1,));
-    Rmap_bm_to_am = transpose(Lmap_ap_to_bp',(2,),(1,));
 
     h_pm = TensorMap(ones,Elt,psp,psp);
     blocks(h_pm)[(U₁(0)⊠SU₂(0)⊠ FermionParity(0))] .=0;
@@ -56,7 +52,7 @@ function fused_quantum_chemistry_hamiltonian(E0,K,V,Elt=Float64)
     @plansor o_derp[-1 -2;-3 -4] := am[-1 1;-3]*ap[1 -2;-4]
     h_pm_derp = transpose(h_pm,(2,1),());
     Lmap_apam_to_pm = find_right_map(o_derp,h_pm_derp)
-    
+
     @plansor o_derp[-1 -2;-3 -4] := bm[-1;-3 1]*bp[-2;1 -4]
     h_pm_derp2 = transpose(h_pm,(),(2,1));
     Rmap_bpbm_to_pm = find_left_map(o_derp,h_pm_derp2)
@@ -354,9 +350,9 @@ function fused_quantum_chemistry_hamiltonian(E0,K,V,Elt=Float64)
         domspaces[loc,indmap_2R[2,i,2,j]] = _firstspace(pp_f)
     end
 
-    #----------------
     
-    println("offset $(sum(length.(op_blocks)))")
+    
+    #println("offset $(sum(length.(op_blocks)))")
     onsite = fill(add_util_leg(h_pm)*0,basis_size);
     for i in 1:basis_size
         onsite[i] += K[i,i]*add_util_leg(h_pm);
@@ -380,6 +376,8 @@ function fused_quantum_chemistry_hamiltonian(E0,K,V,Elt=Float64)
     for b in 1:basis_size
         push!(op_blocks[b],(lmask,B[Elt(1)],onsite[b],B[Elt(1)],rmask));
     end
+
+    #----------------
     
     @plansor ppLm[-1 -2;-3 -4] := bp[-1;1 -2]*h_pm[1;-3]*conj(ut[-4])
     @plansor Lpmm[-1 -2;-3 -4] := bm[-1;-3 1]*h_pm[-2;1]*conj(ut[-4])
@@ -414,7 +412,7 @@ function fused_quantum_chemistry_hamiltonian(E0,K,V,Elt=Float64)
     end
 
     # fill in all V terms
-    println("onsite $(sum(length.(op_blocks)))")
+    #println("onsite $(sum(length.(op_blocks)))")
 
     # 3|1
     @plansor ppRm[-1 -2;-3 -4] := ut[-1]*ap[1 -2;-4]*h_pm[1;-3]
@@ -436,7 +434,7 @@ function fused_quantum_chemistry_hamiltonian(E0,K,V,Elt=Float64)
         push!(op_blocks[i],block2masks(lblocks,Rpmm,rblocks))
     end
     
-    println("3|1 $(sum(length.(op_blocks)))")
+    #println("3|1 $(sum(length.(op_blocks)))")
 
     # 2|2
     # 2|1|1
@@ -747,7 +745,6 @@ function fused_quantum_chemistry_hamiltonian(E0,K,V,Elt=Float64)
         for j in i+1:basis_size,k in j+1:basis_size            
             rmask[indmap_2R[1,j,2,k]] = true;
             rmask[indmap_2R[2,j,1,k]] = true;
-            rblocks[indmap_2R[1,j,2,k]] = 
             rblocks[indmap_2R[1,j,2,k]] = Elt(V[i,j,k,i]+V[j,i,i,k]);
 
             rblocks[indmap_2R[2,j,1,k]] = -Elt(V[i,k,i,j]+V[k,i,j,i]);
@@ -771,13 +768,14 @@ function fused_quantum_chemistry_hamiltonian(E0,K,V,Elt=Float64)
         push!(op_blocks[i],(lmask,B[Elt(1)],ut_amap,rblocks[rmask],rmask))
     end
     
-    println("2|2 $(sum(length.(op_blocks)))")
+    #println("2|2 $(sum(length.(op_blocks)))")
 
     
     # 1|1|1|1
     # (i,j) in indmap_2, 1 in indmap_4, 1 onsite
 
     @plansor jimR_1[-1 -2;-3 -4] := pp_f_1[-1;1 2]*τ[3 2;-4 -2]*bm[1;-3 3]
+    
     
     # 3 left of half_basis_size
     for k in 3:half_basis_size,l in k+1:basis_size
@@ -847,7 +845,7 @@ function fused_quantum_chemistry_hamiltonian(E0,K,V,Elt=Float64)
         end
         push!(op_blocks[k],block2masks(lblocks,bp_p,rblocks));
     end
-    println("1|1|1|1 (1,3) $(sum(length.(op_blocks)))")
+    #println("1|1|1|1 (1,3) $(sum(length.(op_blocks)))")
     
     for k in 3:half_basis_size, i in 1:k-1, j in i+1:k-1
         numblocks = 0
@@ -939,7 +937,7 @@ function fused_quantum_chemistry_hamiltonian(E0,K,V,Elt=Float64)
         push!(op_blocks[k],block2masks(lblocks,bp_p,rblocks));
         
     end
-    println("1|1|1|1 (1,3) $(sum(length.(op_blocks)))")
+    #println("1|1|1|1 (1,3) $(sum(length.(op_blocks)))")
     
     # 3 right of half_basis_size
     for i in 1:basis_size,j in i+1:basis_size
@@ -1016,7 +1014,7 @@ function fused_quantum_chemistry_hamiltonian(E0,K,V,Elt=Float64)
         
     end
     
-    println("1|1|1|1 (3,1) $(sum(length.(op_blocks)))") 
+    #println("1|1|1|1 (3,1) $(sum(length.(op_blocks)))") 
     for j in half_basis_size:basis_size,k in max(j+1,half_basis_size+1):basis_size,l in k+1:basis_size
         j >= half_basis_size || continue
         
@@ -1113,7 +1111,7 @@ function fused_quantum_chemistry_hamiltonian(E0,K,V,Elt=Float64)
         push!(op_blocks[j],block2masks(lblocks,(p_ap-jimm)/2,rblocks));
         
     end
-    println("1|1|1|1 (3,1) $(sum(length.(op_blocks)))")
+    #println("1|1|1|1 (3,1) $(sum(length.(op_blocks)))")
 
     # loc == half_basis_size:
     @plansor jkil_2[-1 -2;-3 -4] := mp_f_2[-1;1 2]*ai[3;-3]*τ[3 1;4 5]*τ[5 2;6 -2]*conj(mp_f_2[-4;4 6])
@@ -1270,7 +1268,7 @@ function fused_quantum_chemistry_hamiltonian(E0,K,V,Elt=Float64)
         push!(op_blocks[half_basis_size],block2masks(lblocks,jkil_2,rblocks));
     end
     
-    println("halfbasis $(sum(length.(op_blocks))+sum(length.(scal_blocks)))")
+    #println("halfbasis $(sum(length.(op_blocks))+sum(length.(scal_blocks)))")
 
     op_blocks = map(op_blocks) do b
         filter!(b) do f
@@ -1327,7 +1325,26 @@ function fused_quantum_chemistry_hamiltonian(E0,K,V,Elt=Float64)
         end
         opscal_blocks[i] = FusedSparseBlock{Elt,O,typeof(psp)}(domspaces[i,:],adjoint.(domspaces[mod1(i+1,end),:]),psp,vecs);
     end
-    @show sum([length(o.blocks) for o in opscal_blocks])
     
-    (compress(FusedMPOHamiltonian{Elt,O,typeof(psp)}(opscal_blocks)), (indmap_1L, indmap_1R, indmap_2L, indmap_2R))
+    (compressed_ham,mapped) = compress(FusedMPOHamiltonian{Elt,O,typeof(psp)}(opscal_blocks));
+    
+    indmap_1Ls = copy.([indmap_1L for i in 1:length(compressed_ham)+1]);
+    indmap_2Ls = copy.([indmap_2L for i in 1:length(compressed_ham)+1]);
+    indmap_1Rs = copy.([indmap_1R for i in 1:length(compressed_ham)+1]);
+    indmap_2Rs = copy.([indmap_2R for i in 1:length(compressed_ham)+1]);
+    for (loc,m) in enumerate(mapped)
+        for symb in [indmap_1Ls,indmap_2Ls,indmap_1Rs,indmap_2Rs]
+            for (i,el) in enumerate(symb[loc])
+                hit = findfirst(x->x==el,m);
+                if isnothing(hit)
+                    symb[loc][i] = 0
+                else
+                    symb[loc][i] = hit;
+                end
+            end
+        end
+    end
+
+
+    compressed_ham,indmap_1Ls, indmap_1Rs, indmap_2Ls, indmap_2Rs
 end

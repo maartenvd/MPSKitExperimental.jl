@@ -2,19 +2,12 @@ struct fused_∂∂AC{A}
     blocks::A
 end
 
-function MPSKit.∂∂AC(pos::Int,mps,ham::FusedMPOHamiltonian,cache)
-    opp = ham[pos];
-    le = leftenv(cache,pos,mps);
-    re = rightenv(cache,pos,mps);
+function _make_AC_factories(opp::FusedSparseBlock{E,O,Sp},ac) where {E,O,Sp}
+    S = spacetype(O);
+    storage = storagetype(O);
 
-
-
-    # tranpose factories:
-    S = spacetype(eltype(mps));
-    storage = storagetype(eltype(mps));
 
     mvaltype_2_3 = DelayedFactType(S,storage,2,3);
-    mvaltype_3_2 = DelayedFactType(S,storage,3,2);
     mvaltype_3_1 = DelayedFactType(S,storage,3,1);
     tvaltype_2_1 = TransposeFactType(S,storage,2,1);
     tvaltype_3_2 = TransposeFactType(S,storage,3,2);
@@ -22,11 +15,12 @@ function MPSKit.∂∂AC(pos::Int,mps,ham::FusedMPOHamiltonian,cache)
 
     
     mfactory_2_3 = Dict{Any,mvaltype_2_3}();
-    mfactory_3_2 = Dict{Any,mvaltype_3_2}();
     mfactory_3_1 = Dict{Any,mvaltype_3_1}();
     tfactory_2_1 = Dict{Any,tvaltype_2_1}();
     tfactory_3_2 = Dict{Any,tvaltype_3_2}();
     tfactory_2_2 = Dict{Any,tvaltype_2_2}();
+
+
 
     #---- create factories
     promise_creation = Dict{Any,Any}();
@@ -34,17 +28,19 @@ function MPSKit.∂∂AC(pos::Int,mps,ham::FusedMPOHamiltonian,cache)
     let 
         
         for (lmask,lblock,e,rblock,rmask) in opp.blocks
-            l = le[lmask][1];
-            r = re[rmask][1];
+            l_virt = space(ac,1);
+            l_o = opp.domspaces[lmask][1];
+            r_o = opp.imspaces[rmask][1];
+            r_virt = space(ac,3)';
 
-            homsp_2_1_2_1 = codomain(l)←domain(l);
+            homsp_2_1_2_1 = l_virt*l_o'←l_virt
             key_2_1_2_1 = (homsp_2_1_2_1,(3,1),(2,));
 
             if !(key_2_1_2_1 in keys(promise_creation))
                 promise_creation[key_2_1_2_1] = @Threads.spawn (tfactory_2_1,TransposeFact(homsp_2_1_2_1,storage,(3,1),(2,)))
             end
 
-            key_2_3_2_3 = space(l,3)*space(l,1)←space(e,3)'*space(e,4)'*space(e,2)';
+            key_2_3_2_3 = l_virt'*l_virt←space(e,3)'*space(e,4)'*space(e,2)';
             key_2_3_3_2 = (key_2_3_2_3,(2,5,4),(1,3));
             if !(key_2_3_3_2 in keys(promise_creation))
                 t_t = @Threads.spawn (mfactory_2_3,DelayedFact(key_2_3_2_3,storage))
@@ -53,8 +49,8 @@ function MPSKit.∂∂AC(pos::Int,mps,ham::FusedMPOHamiltonian,cache)
             end
 
             p1 = opp.pspace;
-            v1 = left_virtualspace(mps,pos-1);
-            v2 = right_virtualspace(mps,pos);
+            v1 = l_virt;
+            v2 = r_virt;
 
             homsp_mult = v1*p1*space(e,4) ← v2
             if !(homsp_mult in keys(promise_creation))
@@ -70,6 +66,21 @@ function MPSKit.∂∂AC(pos::Int,mps,ham::FusedMPOHamiltonian,cache)
             Base.setindex!(d,v,k);
         end
     end
+
+     
+    return (mfactory_2_3, mfactory_3_1, tfactory_2_1, tfactory_3_2, tfactory_2_2)
+
+end
+
+function MPSKit.∂∂AC(pos::Int,mps,ham::FusedMPOHamiltonian,cache)
+    opp = ham[pos];
+    le = leftenv(cache,pos,mps);
+    re = rightenv(cache,pos,mps);
+
+
+
+    # tranpose factories:
+    (mfactory_2_3, mfactory_3_1, tfactory_2_1, tfactory_3_2, tfactory_2_2) = _make_AC_factories(opp,mps.AC[pos]);
 
     process_blocks = Map() do (lmask,lblock,e,rblock,rmask)
         cl = le[lmask];

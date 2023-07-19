@@ -1,4 +1,6 @@
 function compress(ham::FusedMPOHamiltonian{E,O,Sp}) where {E,O,Sp}
+    mapped = [Int[] for i in 1:length(ham)+1];
+
     len = length(ham);
     bl_elt = eltype(ham[1].blocks);
     n_lstartblocks::Vector{bl_elt} = map(ham[1].blocks) do (lmask,lblock,e,rblock,rmask)
@@ -13,6 +15,7 @@ function compress(ham::FusedMPOHamiltonian{E,O,Sp}) where {E,O,Sp}
     end
     n_ldomspaces = [ham[1].domspaces[1]];
     ham.data[1] = FusedSparseBlock{E,O,Sp}(n_ldomspaces,ham[1].imspaces,ham[1].pspace,n_lstartblocks);
+    mapped[1] = [1];
 
     n_rstartblocks::Vector{bl_elt} = map(ham[len].blocks) do (lmask,lblock,e,rblock,rmask)
         rmask = [rmask[end]];
@@ -24,8 +27,13 @@ function compress(ham::FusedMPOHamiltonian{E,O,Sp}) where {E,O,Sp}
     filter!(n_rstartblocks) do (lmask,lblock,e,rblock,rmask)
         rmask[end]
     end
+    mapped[len] = [length(ham[len].imspaces)];
     n_rimspaces = [ham[len].imspaces[end]]
     ham.data[len] = FusedSparseBlock{E,O,Sp}(ham[len].domspaces,n_rimspaces,ham[len].pspace,n_rstartblocks);
+    
+    for i in 1:length(ham)-1
+        mapped[i+1] = collect(1:length(ham[i].imspaces))
+    end
 
     for i in [1:length(ham)-1;length(ham)-2:-1:1]
         block_1 = ham[i];
@@ -34,6 +42,7 @@ function compress(ham::FusedMPOHamiltonian{E,O,Sp}) where {E,O,Sp}
         red_im = reduce((a,b)->a.||b,map(last,block_1.blocks));
         red_dom = reduce((a,b)->a.||b,map(first,block_2.blocks));
         red = red_im.&&red_dom
+        mapped[i+1] = mapped[i+1][red];
 
         nl_imspaces = block_1.imspaces[red];
         nl_blocks::Vector{bl_elt} = map(ham[i].blocks) do (lmask,lblock,e,rblock,rmask)
@@ -57,8 +66,8 @@ function compress(ham::FusedMPOHamiltonian{E,O,Sp}) where {E,O,Sp}
     end
 
     for i in 1:length(ham)
-        @show length(ham[i].blocks),length(ham[i].domspaces),length(ham[i].imspaces)
+        #@show length(ham[i].blocks),length(ham[i].domspaces),length(ham[i].imspaces)
     end
 
-    return ham
+    return ham,mapped
 end
