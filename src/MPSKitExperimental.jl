@@ -41,6 +41,7 @@ module MPSKitExperimental
     using GaussianBasis
     export CASSCF_Ham, GrassmannSCF;
     include("quantumchemistry/grassmann_scf.jl")
+    include("quantumchemistry/orbopt.jl")
     
 
 end

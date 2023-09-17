@@ -23,21 +23,15 @@ function CASSCF_Ham(basis::BasisSet,active)
     
     (vals,vecs) = eigen(C);
     
-    CASSCF_Ham(basis,complex(vecs*diagm(sqrt.(vals).^-1)),active)
+    CASSCF_Ham(basis,vecs*diagm(sqrt.(vals).^-1),active)
 end
 
 function MPSKit.find_groundstate(state,ham::CASSCF_Ham,alg::GrassmannSCF)
-
     (out,fx,_,_,normgradhistory) = optimize(cfun,manifoldpoint(state,ham), ConjugateGradient(gradtol=alg.tol, maxiter=alg.maxiter, verbosity = 2);
                 retract = retract, inner = inner, transport! = transport! ,
-                scale! = scale! , add! = add! , isometrictransport = true,precondition = precondition);
+                scale! = GrassmannMPS.scale! , add! = GrassmannMPS.add! , isometrictransport = true, finalize! = my_finalize!);
     st = out[1]; ham = out[2];
     return (st,ham)
-    
-    #=
-    optimtest(cfun,manifoldpoint(state,ham);alpha = 0:0.01:0.1,
-                retract = retract, inner = inner);
-    =#
 end
 
 function _make_dVdK_factories(A)
@@ -149,6 +143,8 @@ function _make_dVdK_factories(A)
     
 end
 
+# this function calculates the one and two body reduced density matrices. Because I was lazy, it is slow and makes use of the mpo-representation code
+# conceptually this should be decoupled, and it would avoid subtle bugs that are now very much possible.
 function quantum_chemistry_dV_dK(ham::CASSCF_Ham,state)
     (qchemham,indmap_1Ls, indmap_1Rs, indmap_2Ls, indmap_2Rs) = mpo_representation(ham)
     envs = disk_environments(state,qchemham)
@@ -161,17 +157,16 @@ function quantum_chemistry_dV_dK(ham::CASSCF_Ham,state)
 
     dK = fill(zero(Elt),basis_size,basis_size);
     dV = fill(zero(Elt),basis_size,basis_size,basis_size,basis_size);
-
     psp = Vect[(Irrep[U₁]⊠Irrep[SU₂] ⊠ FermionParity)]((0,0,0)=>1, (1,1//2,1)=>1, (2,0,0)=>1);
 
     ap = TensorMap(ones,Elt,psp*Vect[(Irrep[U₁]⊠Irrep[SU₂] ⊠ FermionParity)]((-1,1//2,1)=>1),psp);
-    blocks(ap)[(U₁(0)⊠SU₂(0)⊠FermionParity(0))] .*= -sqrt(2);
-    blocks(ap)[(U₁(1)⊠SU₂(1//2)⊠FermionParity(1))]  .*= 1;
+    blocks(ap)[(Irrep[U₁](0)⊠Irrep[SU₂](0)⊠FermionParity(0))] .*= -sqrt(2);
+    blocks(ap)[(Irrep[U₁](1)⊠Irrep[SU₂](1//2)⊠FermionParity(1))]  .*= 1;
 
 
     bm = TensorMap(ones,Elt,psp,Vect[(Irrep[U₁]⊠Irrep[SU₂]⊠FermionParity)]((-1,1//2,1)=>1)*psp);
-    blocks(bm)[(U₁(0)⊠SU₂(0)⊠FermionParity(0))] .*= sqrt(2);
-    blocks(bm)[(U₁(1)⊠SU₂(1//2)⊠FermionParity(1))] .*= -1;
+    blocks(bm)[(Irrep[U₁](0)⊠Irrep[SU₂](0)⊠FermionParity(0))] .*= sqrt(2);
+    blocks(bm)[(Irrep[U₁](1)⊠Irrep[SU₂](1//2)⊠FermionParity(1))] .*= -1;
 
     # this transposition is easier to reason about in a planar way
     am = transpose(ap',(2,1),(3,));
@@ -187,9 +182,9 @@ function quantum_chemistry_dV_dK(ham::CASSCF_Ham,state)
     @plansor b_derp[-1 -2;-3] := bm[1;2 -2]*τ[-3 -1;2 1]
 
     h_pm = TensorMap(ones,Elt,psp,psp);
-    blocks(h_pm)[(U₁(0)⊠SU₂(0)⊠ FermionParity(0))] .=0;
-    blocks(h_pm)[(U₁(1)⊠SU₂(1//2)⊠ FermionParity(1))] .=1;
-    blocks(h_pm)[(U₁(2)⊠SU₂(0)⊠ FermionParity(0))] .=2;
+    blocks(h_pm)[(Irrep[U₁](0)⊠Irrep[SU₂](0)⊠ FermionParity(0))] .=0;
+    blocks(h_pm)[(Irrep[U₁](1)⊠Irrep[SU₂](1//2)⊠ FermionParity(1))] .=1;
+    blocks(h_pm)[(Irrep[U₁](2)⊠Irrep[SU₂](0)⊠ FermionParity(0))] .=2;
 
     @plansor o_derp[-1 -2;-3 -4] := am[-1 1;-3]*ap[1 -2;-4]
     h_pm_derp = transpose(h_pm,(2,1),());
@@ -265,7 +260,7 @@ function quantum_chemistry_dV_dK(ham::CASSCF_Ham,state)
     @plansor LpRm[-1 -2; -3 -4] := ap[1 -2;-4]*bm[-1;-3 1]
     @plansor RpLm[-1 -2; -3 -4] := bp[-1;1 -2]*am[-3 1;-4]
     @plansor _pm_left[-1 -2; -3 -4] := (mp_f*Lmap_apam_to_pm)[-1]*h_pm[-2;-3]*conj(ut[-4])
-    @plansor _pm_right[-1 -2; -3 -4] := ut[-1]*h_pm[-2;-3]*(transpose(Rmap_bpbm_to_pm*pm_f',(1,)))[-4]
+    @plansor _pm_right[-1 -2; -3 -4] := ut[-1]*h_pm[-2;-3]*(transpose(Rmap_bpbm_to_pm*pm_f',(1,),()))[-4]
     @plansor LRLm_1[-1 -2; -3 -4] := (mp_f_1)[-1;1 2]*bm[2;3 -2]*τ[1 3;-3 -4]
     @plansor LpLR_1[-1 -2; -3 -4] := (mp_f_1)[-1;1 2]*bp[1;-3 3]*τ[3 2;-4 -2]
     @plansor RpLL[-1 -2; -3 -4] := mm_f[-1;1 2]*bp[2;3 -2]*τ[1 3;-3 -4]
@@ -278,8 +273,6 @@ function quantum_chemistry_dV_dK(ham::CASSCF_Ham,state)
     @plansor jikl_1[-1 -2; -3 -4] := pp_f_1[-1;1 2]*ai[3;-3]*τ[3 1;4 5]*τ[5 2;6 -2]*conj(pp_f_1[-4;4 6])
     @plansor lkij_1[-1 -2; -3 -4] := mm_f_1[-1;1 2]*ai[3;-3]*τ[3 1;4 5]*τ[5 2;6 -2]*conj(mm_f_1[-4;4 6])
 
-    dAC = similar.(state.AL);
-    
     S = spacetype(eltype(state));
     storage = storagetype(eltype(state));
 
@@ -428,7 +421,7 @@ function quantum_chemistry_dV_dK(ham::CASSCF_Ham,state)
 
         (tfactory_2_2, mfactory_2_2, mfactory_2_1,tfactory_1_2, tfactory_0_3, tfactory_3_0) = _make_dVdK_factories(ac);
         
-        dAC[loc] = MPSKit.∂∂AC(loc, state, qchemham, envs)(ac);
+        #dAC[loc] = MPSKit.∂∂AC(loc, state, qchemham, envs)(ac);
 
         # onsite
         let
@@ -1360,452 +1353,56 @@ function quantum_chemistry_dV_dK(ham::CASSCF_Ham,state)
         
        
     end
-
-    energy = real(sum(expectation_value(state, qchemham, envs)))
     #@show energy
-    (dV,dK,dAC,energy)
-end
-
-function project_U(odV,odK,h::CASSCF_Ham)
-    #=
-    energy should be V * odV + K * odK + E 
-    odV
-    =#
-
-    g = zero(h.ao2mo);
-
-    B = h.ao2mo#vecs*diagm(sqrt.(vals).^-1)*h.U'
-    
-    K = B'*(nuclear(h.basis)+kinetic(h.basis))*B;
-    #c_k += K[h.active,h.active]
-    K_a_o = K[h.active,:];
-    @tensor g[h.active,:][-1;-2] += -K_a_o[1;-2]*odK[1;-1];
-    K_o_a = K[:,h.active];
-    @tensor g[:,h.active][-1;-2] += K_o_a[-1;1]*odK[-2;1];
-
-    filled = 1:(h.active.start-1);
-    active = h.active;
-
-    Nvals = GaussianBasis.num_basis.(h.basis.basis)
-    ao_offset = [sum(Nvals[1:(i-1)])  for i = 1:h.basis.nshells]
-
-    #V_nuc += tr(K[filled,filled])*2
-    k_o_f = K[:,filled];
-    k_f_o = K[filled,:];
-    
-    g[filled,:] -= k_f_o*2;
-    g[:,filled] += k_o_f*2;
-   
-    
-    buffers = typeof(g)[];
-    
-    ijkls = Tuple{Int,Int,Int,Int}[];
-    for i in 1:h.basis.nshells, j in 1:i, k in 1:i, l in 1:k
-        k!=i || j>=l || continue; 
-        push!(ijkls,(i,j,k,l))
-    end
-    
-    @sync for sub_ijkls in partition(ijkls,Int(round(length(ijkls)/nthreads())))
-        push!(buffers,zero(g));
-        tcur_buff = buffers[end];
-
-        @Threads.spawn begin
-            for (i,j,k,l) in sub_ijkls
-                
-                buff = ERI_2e4c(h.basis,i,j,k,l)/2;
-                norm(buff)<1e-12 && continue
-                
-                eightfold_way = unique([(1,2,3,4),(2,1,3,4),(2,1,4,3),(1,2,4,3),(3,4,1,2),(3,4,2,1),(4,3,2,1),(4,3,1,2)]) do (ai,bi,ci,di)
-                    (a,b,c,d) = map(x->(i,j,k,l)[x],(ai,bi,ci,di))
-                end
-                
-                buff /= 8/length(eightfold_way);
-                
-                # can be sped up by a factor of 2 if U is known to be real
-                for (ai,bi,ci,di) in [(1,2,3,4),(2,1,3,4)]    
-                    (a,b,c,d) = map(x->(i,j,k,l)[x],(ai,bi,ci,di))
-                    buff_perm = permutedims(buff,(ai,bi,ci,di));
-
-                    cur_buff = zero(tcur_buff);
-
-                    sl_a = ao_offset[a]+1:ao_offset[a]+Nvals[a];
-                    sl_b = ao_offset[b]+1:ao_offset[b]+Nvals[b];
-                    sl_c = ao_offset[c]+1:ao_offset[c]+Nvals[c];
-                    sl_d = ao_offset[d]+1:ao_offset[d]+Nvals[d];
-                    t_1 = @view B'[active,sl_a]; t_1_p = @view B'[:,sl_a];
-                    t_2 = @view B'[active,sl_c]; t_2_p = @view B'[:,sl_c];
-                    t_3 = @view B[sl_d,active]; t_3_p = @view B[sl_d,:];
-                    t_4 = @view B[sl_b,active]; t_4_p = @view B[sl_b,:];
-                    #@tensor g[-1;-2] := t_1[5,1]*t_2[6,2]*t_3[3,7]*t_4[4,8]*buff_perm[1,4,2,3]*odV[5,6,7,8]
-                    @tensor cur_buff[:,active][-1;-2] += t_1_p[-1,1]*t_2[6,2]*t_3[3,7]*t_4[4,8]*buff_perm[1,4,2,3]*odV[-2,6,7,8] order = (8, 3, 2, 6, 7, 4, 1)
-                    @tensor cur_buff[:,active][-1;-2] += t_1[5,1]*t_2_p[-1,2]*t_3[3,7]*t_4[4,8]*buff_perm[1,4,2,3]*odV[5,-2,7,8] order = (8, 3, 1, 5, 7, 4, 2)
-                    @tensor cur_buff[active,:][-1;-2] -= t_1[5,1]*t_2[6,2]*t_3_p[3,-2]*t_4[4,8]*buff_perm[1,4,2,3]*odV[5,6,-1,8] order = (8, 2, 1, 5, 6, 4, 3)
-                    @tensor cur_buff[active,:][-1;-2] -= t_1[5,1]*t_2[6,2]*t_3[3,7]*t_4_p[4,-2]*buff_perm[1,4,2,3]*odV[5,6,7,-1] order = (1, 7, 6, 2, 3, 5, 4)
-                    
-                    t_1 = @view B'[active,sl_a];
-                    t_2 = @view B'[filled,sl_c]
-                    t_3 = @view B[sl_d,filled]
-                    t_4 = @view B[sl_b,active]
-                    @tensor cur_buff[:,active][-1;-2] += odK[-2,7]*t_1_p[-1,1]*t_2[2,3]*t_3[4,2]*t_4[5,7]*2*buff_perm[1,5,3,4] order = (2, 3, 4, 5, 1, 7)
-                    @tensor cur_buff[:,filled][-1;-2] += odK[6,7]*t_1[6,1]*t_2_p[-1,3]*t_3[4,-2]*t_4[5,7]*2*buff_perm[1,5,3,4] order = (7, 6, 1, 5, 4, 3)
-                    @tensor cur_buff[filled,:][-1;-2] -= odK[6,7]*t_1[6,1]*t_2[-1,3]*t_3_p[4,-2]*t_4[5,7]*2*buff_perm[1,5,3,4] order = (7, 6, 1, 5, 3, 4)
-                    @tensor cur_buff[active,:][-1;-2] -= odK[6,-1]*t_1[6,1]*t_2[2,3]*t_3[4,2]*t_4_p[5,-2]*2*buff_perm[1,5,3,4] order = (2, 3, 4, 1, 5, 6)
-                            
-                    t_1 = @view B'[filled,sl_a];
-                    t_2 = @view B'[active,sl_c]
-                    t_3 = @view B[sl_d,active]
-                    t_4 = @view B[sl_b,filled]
-                    @tensor cur_buff[:,filled][-1;-2] += odK[6,7]*t_1_p[-1,1]*t_2[6,3]*t_3[4,7]*t_4[5,-2]*2*buff_perm[1,5,3,4] order = (7, 6, 3, 4, 5, 1)
-                    @tensor cur_buff[:,active][-1;-2] += odK[-2,7]*t_1[2,1]*t_2_p[-1,3]*t_3[4,7]*t_4[5,2]*2*buff_perm[1,5,3,4] order = (7, 2, 1, 5, 4, 3)
-                    @tensor cur_buff[active,:][-1;-2] -= odK[6,-1]*t_1[2,1]*t_2[6,3]*t_3_p[4,-2]*t_4[5,2]*2*buff_perm[1,5,3,4] order = (2, 1, 5, 3, 4, 6)
-                    @tensor cur_buff[filled,:][-1;-2] -= odK[6,7]*t_1[-1,1]*t_2[6,3]*t_3[4,7]*t_4_p[5,-2]*2*buff_perm[1,5,3,4] order = (7, 6, 3, 4, 1, 5)
-                            
-                    t_1 = @view B'[filled,sl_a];
-                    t_2 = @view B'[active,sl_c]
-                    t_3 = @view B[sl_d,filled]
-                    t_4 = @view B[sl_b,active]
-                    @tensor cur_buff[:,filled][-1;-2] -= odK[6,7]*t_1_p[-1,1]*t_2[6,3]*t_3[4,-2]*t_4[5,7]*buff_perm[1,5,3,4] order = (6, 7, 5, 3, 4, 1)
-                    @tensor cur_buff[:,active][-1;-2] -= odK[-2,7]*t_1[2,1]*t_2_p[-1,3]*t_3[4,2]*t_4[5,7]*buff_perm[1,5,3,4] order = (2, 1, 4, 5, 3, 7)
-                    @tensor cur_buff[filled,:][-1;-2] += odK[6,7]*t_1[-1,1]*t_2[6,3]*t_3_p[4,-2]*t_4[5,7]*buff_perm[1,5,3,4] order = (6, 7, 5, 3, 1, 4)
-                    @tensor cur_buff[active,:][-1;-2] += odK[6,-1]*t_1[2,1]*t_2[6,3]*t_3[4,2]*t_4_p[5,-2]*buff_perm[1,5,3,4] order = (2, 1, 4, 3, 5, 6)
-                            
-                    t_1 = @view B'[active,sl_a];
-                    t_2 = @view B'[filled,sl_c]
-                    t_3 = @view B[sl_d,active]
-                    t_4 = @view B[sl_b,filled]
-                    @tensor cur_buff[:,active][-1;-2] -= odK[-2,7]*t_1_p[-1,1]*t_2[2,3]*t_3[4,7]*t_4[5,2]*buff_perm[1,5,3,4] order = (2, 5, 3, 4, 1, 7)
-                    @tensor cur_buff[:,filled][-1;-2] -= odK[6,7]*t_1[6,1]*t_2_p[-1,3]*t_3[4,7]*t_4[5,-2]*buff_perm[1,5,3,4] order = (6, 7, 1, 4, 5, 3)
-                    @tensor cur_buff[active,:][-1;-2] += odK[6,-1]*t_1[6,1]*t_2[2,3]*t_3_p[4,-2]*t_4[5,2]*buff_perm[1,5,3,4] order = (2, 5, 3, 1, 4, 6)
-                    @tensor cur_buff[filled,:][-1;-2] += odK[6,7]*t_1[6,1]*t_2[-1,3]*t_3[4,7]*t_4_p[5,-2]*buff_perm[1,5,3,4] order = (6, 7, 1, 4, 3, 5)
-                            
-                    t_1 = @view B'[filled,sl_a];
-                    t_2 = @view B'[filled,sl_c];
-                    t_3 = @view B[sl_d,filled];
-                    t_4 = @view B[sl_b,filled];
-                    @tensor cur_buff[:,filled][-1;-2] += 4*t_1_p[-1,1]*t_2[6,2]*t_3[3,6]*t_4[4,-2]*buff_perm[1,4,2,3] order = (6, 2, 3, 4, 1)
-                    @tensor cur_buff[:,filled][-1;-2] += 4*t_1[5,1]*t_2_p[-1,2]*t_3[3,-2]*t_4[4,5]*buff_perm[1,4,2,3] order = (5, 1, 4, 3, 2)
-                    @tensor cur_buff[filled,:][-1;-2] -= 4*t_1[5,1]*t_2[-1,2]*t_3_p[3,-2]*t_4[4,5]*buff_perm[1,4,2,3] order = (5, 1, 4, 2, 3)
-                    @tensor cur_buff[filled,:][-1;-2] -= 4*t_1[-1,1]*t_2[6,2]*t_3[3,6]*t_4_p[4,-2]*buff_perm[1,4,2,3] order = (6, 2, 3, 1, 4)
-                            
-                    @tensor cur_buff[:,filled][-1;-2] -= 2*t_1_p[-1,1]*t_2[6,2]*t_3[3,-2]*t_4[4,6]*buff_perm[1,4,2,3] order = (6, 4, 2, 3, 1)
-                    @tensor cur_buff[:,filled][-1;-2] -= 2*t_1[5,1]*t_2_p[-1,2]*t_3[3,5]*t_4[4,-2]*buff_perm[1,4,2,3] order = (5, 1, 3, 4, 2)
-                    @tensor cur_buff[filled,:][-1;-2] += 2*t_1[-1,1]*t_2[6,2]*t_3_p[3,-2]*t_4[4,6]*buff_perm[1,4,2,3] order = (6, 4, 2, 1, 3)
-                    @tensor cur_buff[filled,:][-1;-2] += 2*t_1[5,1]*t_2[-1,2]*t_3[3,5]*t_4_p[4,-2]*buff_perm[1,4,2,3] order = (5, 1, 3, 2, 4)
-                    
-                    tcur_buff .+= cur_buff*2
-                    tcur_buff .-= cur_buff'*2
-                end
-            end
-        end
-    end
-    
-    g += sum(buffers)
-    
-    gradient = -g;
-    
-    function apply_hessian(x)
-        hess_g = zero(x);
-
-        #K = B'*(nuclear(h.basis)+kinetic(h.basis))*B;
-        hess_K = x*K + K*x'
-        K_a_o = hess_K[h.active,:];
-        @tensor hess_g[h.active,:][-1;-2] += -K_a_o[1;-2]*odK[1;-1];
-        K_o_a = hess_K[:,h.active];
-        @tensor hess_g[:,h.active][-1;-2] += K_o_a[-1;1]*odK[-2;1];
-
-        k_o_f = hess_K[:,filled];
-        k_f_o = hess_K[filled,:];
-        
-        hess_g[filled,:] -= k_f_o*2;
-        hess_g[:,filled] += k_o_f*2;
-
-        
-        hess_buffers = typeof(hess_g)[];
-        #=
-        @sync for sub_ijkls in partition(ijkls,Int(round(length(ijkls)/nthreads())))
-            push!(hess_buffers,zero(hess_g));
-            tcur_buff = hess_buffers[end];
-
-            @Threads.spawn begin
-                for (i,j,k,l) in sub_ijkls
-
-                    buff = ERI_2e4c(h.basis,i,j,k,l)/2;
-                    norm(buff)<1e-12 && continue
-
-                    eightfold_way = unique([(1,2,3,4),(2,1,3,4),(2,1,4,3),(1,2,4,3),(3,4,1,2),(3,4,2,1),(4,3,2,1),(4,3,1,2)]) do (ai,bi,ci,di)
-                        (a,b,c,d) = map(x->(i,j,k,l)[x],(ai,bi,ci,di))
-                    end
-                    
-                    buff /= 8/length(eightfold_way);
-                    
-                    for (ai,bi,ci,di) in [(1,2,3,4),(2,1,3,4)]
-                        
-
-                        (a,b,c,d) = map(x->(i,j,k,l)[x],(ai,bi,ci,di))
-                        buff_perm = permutedims(buff,(ai,bi,ci,di));
-
-                        cur_buff = zero(tcur_buff);
-                        for (B1,B2,B3,B4) in [(x*B',B',B,B),(B',x*B',B,B),(B',B',B*x',B*x')]
-                            
-                            sl_a = ao_offset[a]+1:ao_offset[a]+Nvals[a];
-                            sl_b = ao_offset[b]+1:ao_offset[b]+Nvals[b];
-                            sl_c = ao_offset[c]+1:ao_offset[c]+Nvals[c];
-                            sl_d = ao_offset[d]+1:ao_offset[d]+Nvals[d];
-                            t_1 = @view B1[active,sl_a]; t_1_p = @view B1[:,sl_a];
-                            t_2 = @view B2[active,sl_c]; t_2_p = @view B2[:,sl_c];
-                            t_3 = @view B3[sl_d,active]; t_3_p = @view B3[sl_d,:];
-                            t_4 = @view B4[sl_b,active]; t_4_p = @view B4[sl_b,:];
-                            #@tensor g[-1;-2] := t_1[5,1]*t_2[6,2]*t_3[3,7]*t_4[4,8]*buff_perm[1,4,2,3]*odV[5,6,7,8]
-                            @tensor cur_buff[:,active][-1;-2] += t_1_p[-1,1]*t_2[6,2]*t_3[3,7]*t_4[4,8]*buff_perm[1,4,2,3]*odV[-2,6,7,8] order = (8, 3, 2, 6, 7, 4, 1)
-                            @tensor cur_buff[:,active][-1;-2] += t_1[5,1]*t_2_p[-1,2]*t_3[3,7]*t_4[4,8]*buff_perm[1,4,2,3]*odV[5,-2,7,8] order = (8, 3, 1, 5, 7, 4, 2)
-                            @tensor cur_buff[active,:][-1;-2] -= t_1[5,1]*t_2[6,2]*t_3_p[3,-2]*t_4[4,8]*buff_perm[1,4,2,3]*odV[5,6,-1,8] order = (8, 2, 1, 5, 6, 4, 3)
-                            @tensor cur_buff[active,:][-1;-2] -= t_1[5,1]*t_2[6,2]*t_3[3,7]*t_4_p[4,-2]*buff_perm[1,4,2,3]*odV[5,6,7,-1] order = (1, 7, 6, 2, 3, 5, 4)
-                            
-                            
-                            t_1 = @view B1[active,sl_a];
-                            t_2 = @view B2[filled,sl_c]
-                            t_3 = @view B3[sl_d,filled]
-                            t_4 = @view B4[sl_b,active]
-                            @tensor cur_buff[:,active][-1;-2] += odK[-2,7]*t_1_p[-1,1]*t_2[2,3]*t_3[4,2]*t_4[5,7]*2*buff_perm[1,5,3,4] order = (2, 3, 4, 5, 1, 7)
-                            @tensor cur_buff[:,filled][-1;-2] += odK[6,7]*t_1[6,1]*t_2_p[-1,3]*t_3[4,-2]*t_4[5,7]*2*buff_perm[1,5,3,4] order = (7, 6, 1, 5, 4, 3)
-                            @tensor cur_buff[filled,:][-1;-2] -= odK[6,7]*t_1[6,1]*t_2[-1,3]*t_3_p[4,-2]*t_4[5,7]*2*buff_perm[1,5,3,4] order = (7, 6, 1, 5, 3, 4)
-                            @tensor cur_buff[active,:][-1;-2] -= odK[6,-1]*t_1[6,1]*t_2[2,3]*t_3[4,2]*t_4_p[5,-2]*2*buff_perm[1,5,3,4] order = (2, 3, 4, 1, 5, 6)
-                                    
-                            t_1 = @view B1[filled,sl_a];
-                            t_2 = @view B2[active,sl_c]
-                            t_3 = @view B3[sl_d,active]
-                            t_4 = @view B4[sl_b,filled]
-                            @tensor cur_buff[:,filled][-1;-2] += odK[6,7]*t_1_p[-1,1]*t_2[6,3]*t_3[4,7]*t_4[5,-2]*2*buff_perm[1,5,3,4] order = (7, 6, 3, 4, 5, 1)
-                            @tensor cur_buff[:,active][-1;-2] += odK[-2,7]*t_1[2,1]*t_2_p[-1,3]*t_3[4,7]*t_4[5,2]*2*buff_perm[1,5,3,4] order = (7, 2, 1, 5, 4, 3)
-                            @tensor cur_buff[active,:][-1;-2] -= odK[6,-1]*t_1[2,1]*t_2[6,3]*t_3_p[4,-2]*t_4[5,2]*2*buff_perm[1,5,3,4] order = (2, 1, 5, 3, 4, 6)
-                            @tensor cur_buff[filled,:][-1;-2] -= odK[6,7]*t_1[-1,1]*t_2[6,3]*t_3[4,7]*t_4_p[5,-2]*2*buff_perm[1,5,3,4] order = (7, 6, 3, 4, 1, 5)
-                                    
-                            t_1 = @view B1[filled,sl_a];
-                            t_2 = @view B2[active,sl_c]
-                            t_3 = @view B3[sl_d,filled]
-                            t_4 = @view B4[sl_b,active]
-                            @tensor cur_buff[:,filled][-1;-2] -= odK[6,7]*t_1_p[-1,1]*t_2[6,3]*t_3[4,-2]*t_4[5,7]*buff_perm[1,5,3,4] order = (6, 7, 5, 3, 4, 1)
-                            @tensor cur_buff[:,active][-1;-2] -= odK[-2,7]*t_1[2,1]*t_2_p[-1,3]*t_3[4,2]*t_4[5,7]*buff_perm[1,5,3,4] order = (2, 1, 4, 5, 3, 7)
-                            @tensor cur_buff[filled,:][-1;-2] += odK[6,7]*t_1[-1,1]*t_2[6,3]*t_3_p[4,-2]*t_4[5,7]*buff_perm[1,5,3,4] order = (6, 7, 5, 3, 1, 4)
-                            @tensor cur_buff[active,:][-1;-2] += odK[6,-1]*t_1[2,1]*t_2[6,3]*t_3[4,2]*t_4_p[5,-2]*buff_perm[1,5,3,4] order = (2, 1, 4, 3, 5, 6)
-                                    
-                            t_1 = @view B1[active,sl_a];
-                            t_2 = @view B2[filled,sl_c]
-                            t_3 = @view B3[sl_d,active]
-                            t_4 = @view B4[sl_b,filled]
-                            @tensor cur_buff[:,active][-1;-2] -= odK[-2,7]*t_1_p[-1,1]*t_2[2,3]*t_3[4,7]*t_4[5,2]*buff_perm[1,5,3,4] order = (2, 5, 3, 4, 1, 7)
-                            @tensor cur_buff[:,filled][-1;-2] -= odK[6,7]*t_1[6,1]*t_2_p[-1,3]*t_3[4,7]*t_4[5,-2]*buff_perm[1,5,3,4] order = (6, 7, 1, 4, 5, 3)
-                            @tensor cur_buff[active,:][-1;-2] += odK[6,-1]*t_1[6,1]*t_2[2,3]*t_3_p[4,-2]*t_4[5,2]*buff_perm[1,5,3,4] order = (2, 5, 3, 1, 4, 6)
-                            @tensor cur_buff[filled,:][-1;-2] += odK[6,7]*t_1[6,1]*t_2[-1,3]*t_3[4,7]*t_4_p[5,-2]*buff_perm[1,5,3,4] order = (6, 7, 1, 4, 3, 5)
-                                    
-                            t_1 = @view B1[filled,sl_a];
-                            t_2 = @view B2[filled,sl_c];
-                            t_3 = @view B3[sl_d,filled];
-                            t_4 = @view B4[sl_b,filled];
-                            @tensor cur_buff[:,filled][-1;-2] += 4*t_1_p[-1,1]*t_2[6,2]*t_3[3,6]*t_4[4,-2]*buff_perm[1,4,2,3] order = (6, 2, 3, 4, 1)
-                            @tensor cur_buff[:,filled][-1;-2] += 4*t_1[5,1]*t_2_p[-1,2]*t_3[3,-2]*t_4[4,5]*buff_perm[1,4,2,3] order = (5, 1, 4, 3, 2)
-                            @tensor cur_buff[filled,:][-1;-2] -= 4*t_1[5,1]*t_2[-1,2]*t_3_p[3,-2]*t_4[4,5]*buff_perm[1,4,2,3] order = (5, 1, 4, 2, 3)
-                            @tensor cur_buff[filled,:][-1;-2] -= 4*t_1[-1,1]*t_2[6,2]*t_3[3,6]*t_4_p[4,-2]*buff_perm[1,4,2,3] order = (6, 2, 3, 1, 4)
-                                    
-                            @tensor cur_buff[:,filled][-1;-2] -= 2*t_1_p[-1,1]*t_2[6,2]*t_3[3,-2]*t_4[4,6]*buff_perm[1,4,2,3] order = (6, 4, 2, 3, 1)
-                            @tensor cur_buff[:,filled][-1;-2] -= 2*t_1[5,1]*t_2_p[-1,2]*t_3[3,5]*t_4[4,-2]*buff_perm[1,4,2,3] order = (5, 1, 3, 4, 2)
-                            @tensor cur_buff[filled,:][-1;-2] += 2*t_1[-1,1]*t_2[6,2]*t_3_p[3,-2]*t_4[4,6]*buff_perm[1,4,2,3] order = (6, 4, 2, 1, 3)
-                            @tensor cur_buff[filled,:][-1;-2] += 2*t_1[5,1]*t_2[-1,2]*t_3[3,5]*t_4_p[4,-2]*buff_perm[1,4,2,3] order = (5, 1, 3, 2, 4)
-
-                            
-                        end
-                        tcur_buff .+= cur_buff*2;
-                        tcur_buff .-= cur_buff'*2;
-                    end
-                end
-            end
-        end
-        hess_g+= sum(hess_buffers);
-        =#        
-
-        return -hess_g
-
-    end
-
-
-    gradient,apply_hessian
+    (dV,dK)
 end
 
 
-function transform(h::CASSCF_Ham)
-    B = h.ao2mo
-    c_eri = zeros(eltype(B),length(h.active),length(h.active),length(h.active),length(h.active));
-    c_k = zeros(eltype(B),length(h.active),length(h.active));
+function my_finalize!(x, f, fg, numiter)
+    (state,ham,Rhoreg,g,E) = x;
+    (dV,dK) = quantum_chemistry_dV_dK(ham,state);
 
-    V_nuc = GaussianBasis.Molecules.nuclear_repulsion(h.basis.atoms);
-
-    K = B'*(nuclear(h.basis)+kinetic(h.basis))*B;
-    c_k += K[h.active,h.active]
-
-    filled = 1:(h.active.start-1);
-
-    Nvals = GaussianBasis.num_basis.(h.basis.basis)
-    ao_offset = [sum(Nvals[1:(i-1)])  for i = 1:h.basis.nshells]
-
-    V_nuc += tr(K[filled,filled])*2
+    (ham,E) = orb_opt(ham,dV,dK,tol=norm(g));
     
-    
-    buff_k = typeof(c_k)[];
-    buff_eri = typeof(c_eri)[];
-    buff_nuc = typeof(V_nuc)[];
-    
-    ijkls = Tuple{Int,Int,Int,Int}[];
-    for i in 1:h.basis.nshells, j in 1:i, k in 1:i, l in 1:k
-        k!=i || j>=l || continue; 
-        push!(ijkls,(i,j,k,l))
-    end
-    
-    @sync for sub_ijkls in partition(ijkls,Int(round(length(ijkls)/nthreads())))
-
-        push!(buff_k,zero(c_k));
-        push!(buff_eri,zero(c_eri));
-        push!(buff_nuc,zero(V_nuc));
-        cur_k = buff_k[end];
-        cur_eri = buff_eri[end];
-        buff_index = length(buff_nuc);
-
-        @Threads.spawn begin
-
-            for (i,j,k,l) in sub_ijkls
-
-                buff = ERI_2e4c(h.basis,i,j,k,l)/2;
-                norm(buff)<1e-12 && continue
-
-                eightfold_way = unique([(1,2,3,4),(2,1,3,4),(2,1,4,3),(1,2,4,3),(3,4,1,2),(3,4,2,1),(4,3,2,1),(4,3,1,2)]) do (ai,bi,ci,di)
-                    (a,b,c,d) = map(x->(i,j,k,l)[x],(ai,bi,ci,di))
-                end
-                
-                buff /= 8/length(eightfold_way);
-
-                # can be sped up by a factor of 2 if U is known to be real
-                for (ai,bi,ci,di) in [(1,2,3,4),(2,1,3,4)]
-                    
-                    (a,b,c,d) = map(x->(i,j,k,l)[x],(ai,bi,ci,di))
-                    buff_perm = permutedims(buff,(ai,bi,ci,di));
-
-                    sl_a = ao_offset[a]+1:ao_offset[a]+Nvals[a];
-                    sl_b = ao_offset[b]+1:ao_offset[b]+Nvals[b];
-                    sl_c = ao_offset[c]+1:ao_offset[c]+Nvals[c];
-                    sl_d = ao_offset[d]+1:ao_offset[d]+Nvals[d];
-                    
-                    cur_eri_term = zero(cur_eri);
-                    cur_k_term = zero(cur_k);
-                    cur_nuc_term = zero(buff_nuc[buff_index]);
-
-                    t_1 = @view B'[h.active,sl_a];
-                    t_2 = @view B'[h.active,sl_c];
-                    t_3 = @view B[sl_d,h.active];
-                    t_4 = @view B[sl_b,h.active];
-                    @tensor cur_eri_term[-1 -2;-3 -4] += t_1[-1,1]*t_2[-2,2]*t_3[3,-3]*t_4[4,-4]*buff_perm[1,4,2,3]
-                    
-                    
-                    # t_K += ERI[h.active,a,a,h.active]*2
-                    t_1 = @view B'[h.active,sl_a];
-                    t_2 = @view B'[filled,sl_c]
-                    t_3 = @view B[sl_d,filled]
-                    t_4 = @view B[sl_b,h.active]
-                    @tensor cur_k_term[-1;-2] += t_1[-1,1]*t_2[2,3]*t_3[4,2]*t_4[5,-2]*2*buff_perm[1,5,3,4]
-                    
-                    
-                    # t_K += ERI[a,h.active,h.active,a]*2
-                    t_1 = @view B'[filled,sl_a];
-                    t_2 = @view B'[h.active,sl_c]
-                    t_3 = @view B[sl_d,h.active]
-                    t_4 = @view B[sl_b,filled]
-                    @tensor cur_k_term[-1;-2] += t_1[2,1]*t_2[-1,3]*t_3[4,-2]*t_4[5,2]*2*buff_perm[1,5,3,4]
-
-                    # t_K -= ERI[a,h.active,a,h.active]
-                    t_1 = @view B'[filled,sl_a];
-                    t_2 = @view B'[h.active,sl_c]
-                    t_3 = @view B[sl_d,filled]
-                    t_4 = @view B[sl_b,h.active]
-                    @tensor cur_k_term[-1;-2] -= t_1[2,1]*t_2[-1,3]*t_3[4,2]*t_4[5,-2]*buff_perm[1,5,3,4]
-                    
-                    
-                    # t_K -= ERI[h.active,a,h.active,a]
-                    t_1 = @view B'[h.active,sl_a];
-                    t_2 = @view B'[filled,sl_c]
-                    t_3 = @view B[sl_d,h.active]
-                    t_4 = @view B[sl_b,filled]
-                    @tensor cur_k_term[-1;-2] -= t_1[-1,1]*t_2[2,3]*t_3[4,-2]*t_4[5,2]*buff_perm[1,5,3,4]
-
-                    
-                    # E += 4*ERI[a,b,b,a]
-                    t_1 = @view B'[filled,sl_a];
-                    t_2 = @view B'[filled,sl_c];
-                    t_3 = @view B[sl_d,filled];
-                    t_4 = @view B[sl_b,filled];
-                    cur_nuc_term += 4*@tensor t_1[5,1]*t_2[6,2]*t_3[3,6]*t_4[4,5]*buff_perm[1,4,2,3]
-                    
-                    # E -= 2*ERI[a,b,a,b]
-                    cur_nuc_term -= 2*@tensor t_1[5,1]*t_2[6,2]*t_3[3,5]*t_4[4,6]*buff_perm[1,4,2,3]
-                    
-                    cur_eri .+= cur_eri_term;
-                    cur_eri .+= permutedims(cur_eri_term,(2,1,4,3));
-                    cur_eri .+= permutedims(conj.(cur_eri_term),(4,3,2,1))
-                    cur_eri .+= permutedims(conj.(cur_eri_term),(3,4,1,2))
-                    
-                    cur_k .+= 2*cur_k_term
-                    cur_k .+= 2*cur_k_term'
-                    buff_nuc[buff_index] += cur_nuc_term*2
-                    buff_nuc[buff_index] += cur_nuc_term'*2
-                end
-
-                
-                
-            end
-            
-        end
-    end
-
-    V_nuc += sum(buff_nuc);
-    c_k += sum(buff_k);
-    c_eri += sum(buff_eri);
-    
-    return (V_nuc,c_k,c_eri)
-
+    npoint = manifoldpoint(state,ham);
+    (nf,ng) = cfun(npoint)    
+    (npoint,nf,ng)
 end
-
-function mpo_representation(h::CASSCF_Ham)
-    (E,K,ERI) = transform(h);    
-    fused_quantum_chemistry_hamiltonian(E,K,ERI,ComplexF64)
-end
-
 
 function manifoldpoint(state,ham)
-    (dV,dK,dAC,E) = quantum_chemistry_dV_dK(ham,state);
-    (dU,hessian) = project_U(dV,dK,ham);
+    (qchemham,_) = mpo_representation(ham)
+    envs = disk_environments(state,qchemham)
+    E = sum(expectation_value(state,qchemham,envs))
+    al_d = similar(state.AL)
+    for i in 1:length(state)
+        al_d[i] = MPSKit.∂∂AC(i, state,qchemham, envs) * state.AC[i]
+    end
 
-    g = (Grassmann.project.(dAC,state.AL).*0)
+    g = (Grassmann.project.(al_d,state.AL))
 
     Rhoreg = Vector{eltype(state.CR)}(undef,length(state));
     for i in 1:length(state)
         Rhoreg[i] = GrassmannMPS.regularize(state.CR[i],norm(g[i])/10)
     end
 
-    (state,ham,Rhoreg,g,dU,hessian,E);
+    (state,ham,Rhoreg,g,E);
 end
 
 function cfun(x)
-    (state,ham,Rhoreg,g,dU,hessian,E) = x;
+    (state,ham,Rhoreg,g,E) = x;
     
     
     g_prec = map(1:length(state)) do i
         GrassmannMPS.PrecGrad(rmul!(copy(g[i]),state.CR[i]'),Rhoreg[i])
     end
     
-    (E,(g_prec,dU))
+    (E,g_prec)
 end
 
-function retract(x,g,alpha)
+function retract(x,g_prec,alpha)
     flush(stderr); flush(stdout);
+
     (state,ham) = x;
-    (g_prec,grad_U) = g;
     
     h = similar(g_prec);
     y = copy(state);
@@ -1817,78 +1414,29 @@ function retract(x,g,alpha)
         
         y.AC[i] = (tal,state.CR[i])
     end
-    new_U = ham.ao2mo*exp(alpha*grad_U)'
 
-    newpoint = manifoldpoint(y,CASSCF_Ham(ham.basis,new_U,ham.active));
-    newgrad = (h,grad_U)
-    (newpoint,newgrad)
+
+    newpoint = manifoldpoint(y,ham)
+    
+    (newpoint,h)
 end
 
 function transport!(h, x, g, alpha, xp)
-    (s_state,s_ham) = x;
-    (p_state,p_ham) = xp;
-    (h_state,h_ham) = h;
-    (g_state,g_ham) = g;
-
+    (s_state,_) = x;
+    (p_state,_) = xp;
+  
     for i in 1:length(s_state)
-        h_state[i] = GrassmannMPS.PrecGrad(Grassmann.transport!(h_state[i].Pg, s_state.AL[i], g_state[i].Pg, alpha, p_state.AL[i]))
+        h[i] = GrassmannMPS.PrecGrad(Grassmann.transport!(h[i].Pg, s_state.AL[i], g[i].Pg, alpha, p_state.AL[i]))
     end
 
-    
-    E = exp((alpha/2)*g_ham)
-    h_ham = E*h_ham*E'
-
-    #h_ham = Unitary.transport!(h_ham,s_ham.U,g_ham,alpha,p_ham.U);
-    return (h_state,h_ham)
+    return h
 end
 
 function inner(x, g1, g2)
     (state,ham,rhoReg) = x;
-    (g1_state,g1_ham) = g1;
-    (g2_state,g2_ham) = g2;
-    2 * real(sum(map(zip(rhoReg,g1_state,g2_state)) do (a,b,c)
+
+    2 * real(sum(map(zip(rhoReg,g1,g2)) do (a,b,c)
         GrassmannMPS.inner(b,c,a)
-    end))+real(dot(g1_ham,g2_ham))
-end
-
-function scale!(g, alpha)
-    (g_state,g_ham) = g;
-    (g_state .* alpha, g_ham*alpha)
-end
-
-function add!(g1, g2, alpha)
-    (g1_state,g1_ham) = g1;
-    (g2_state,g2_ham) = g2;
-
-    (g1_state+g2_state*alpha,g1_ham+g2_ham*alpha)
-end
-
-function precondition(x,v)
-    # I could not get this preconditioner to behave; nevertheless this appears to be the suggested approach...
-    # the problem appears to be that the linesearch refuses to actually take a step in that direction, despite it being a descent direction
-    return v
-    (g_prec,grad_U) = v;
-    (state,ham,Rhoreg,g,dU,hessian,E) = x;
-    
-    function precfun(w)
-        (x_re,x_im,x_2) = w.vecs;
-
-        x_1 = x_re+1im*x_im;
-        x_1 = (x_1 - x_1')/2
-        y_1 = hessian(x_1) + dU*x_2[1]
-        y_2 = real(dot(dU,x_1))
-
-        y_1 = (y_1-y_1')/2
-        RecursiveVec(real.(y_1),imag.(y_1),[y_2])
-    end
-
-    #small workaround for complex U...
-    (vals,vecs) = eigsolve(precfun,RecursiveVec(real.(grad_U),imag.(grad_U),[1]),1,:SR,Arnoldi())
-    (x_r,x_i,α)=first(vecs).vecs
-    nsol = (x_r+x_i*1im)/α[1]
-    nsol = (nsol-nsol')/2
-   
-
-    return (g_prec,-nsol)
+    end))
 end
 

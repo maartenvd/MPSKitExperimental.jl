@@ -1,4 +1,4 @@
-using TensorKit:FusionTreeDict, SectorDict, HomSpace
+using TensorKit:FusionTreeDict, SectorDict, HomSpace,fusiontreetype
 
 fast_similar(t::TensorMap{S, N₁, N₂, I, SD, F₁, F₂}) where {S, N₁, N₂, I, SD, F₁, F₂} =
     TensorMap{S, N₁, N₂, I, SD, F₁, F₂}(SD(t.data.keys,similar.(t.data.values)),t.codom,t.dom,t.rowr,t.colr)
