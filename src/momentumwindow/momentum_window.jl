@@ -34,7 +34,7 @@ function LeftGaugedMW(datfun, len::Int, maxvirtspace, left_gs::InfiniteMPS, righ
 
     variational = Multiline(map(1:length(left_gs)) do row
         physical_spaces = [space(left_gs,row+col) for col in 1:len];
-        FiniteMPS(datfun,eltype(VLs[row]),physical_spaces,maxvirtspace,left=_lastspace(VLs[row])',right=virtualspace(right_gs,row+len))
+        FiniteMPS(datfun,scalartype(VLs[row]),physical_spaces,maxvirtspace,left=_lastspace(VLs[row])',right=virtualspace(right_gs,row+len))
     end)
 
     LeftGaugedMW(VLs,variational,momentum,left_gs,right_gs)

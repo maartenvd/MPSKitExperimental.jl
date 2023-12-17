@@ -12,7 +12,8 @@ module MPSKitExperimental
     include("momentumwindow/effective_ex.jl")
     include("momentumwindow/timestep.jl")
     include("momentumwindow/mpo_envs.jl")
-    
+    include("momentumwindow/find_groundstate.jl")
+
     export parse_fcidump, fused_quantum_chemistry_hamiltonian, disk_environments
     using MPSKit:fill_data!
     # contains most of the "tricks" needed to avoid tensorkit bottlenecks. 

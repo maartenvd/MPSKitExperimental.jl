@@ -308,7 +308,7 @@ function left_double_env(K,B2,lB1,ham,fuse_fun)
     for pos in 1:length(B2)
         # instantiate
         for i in 1:ham.odim
-            lBs[i,pos+1] = TensorMap(zeros,eltype(lB1[1,pos+1]),_firstspace(lB1[i,pos+1])*space(lB1[i,pos+1],2),_firstspace(fuse_fun)'*_lastspace(lB1[i,pos+1])');
+            lBs[i,pos+1] = TensorMap(zeros,scalartype(lB1[1,pos+1]),_firstspace(lB1[i,pos+1])*space(lB1[i,pos+1],2),_firstspace(fuse_fun)'*_lastspace(lB1[i,pos+1])');
         end
 
         for (i,j) in keys(ham[pos])
@@ -347,7 +347,7 @@ function right_double_env(K,B2,rB1,ham,fuse_fun)
     
     for pos in 1:length(inv_C) 
         for i in 1:ham.odim
-            rBs[i,pos-1] = TensorMap(zeros,eltype(rB1[1,pos-1]),_firstspace(rB1[i,pos-1])*space(rB1[i,pos-1],2),_firstspace(fuse_fun)'*_lastspace(rB1[i,pos-1])')
+            rBs[i,pos-1] = TensorMap(zeros,scalartype(rB1[1,pos-1]),_firstspace(rB1[i,pos-1])*space(rB1[i,pos-1],2),_firstspace(fuse_fun)'*_lastspace(rB1[i,pos-1])')
         end
 
 
