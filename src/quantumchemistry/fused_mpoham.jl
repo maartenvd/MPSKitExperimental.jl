@@ -50,3 +50,25 @@ end
 
 Base.length(h::FusedMPOHamiltonian) = length(h.data);
 Base.getindex(x::FusedMPOHamiltonian,args...) = x.data[args...];
+
+function Base.convert(::Type{FusedMPOHamiltonian},h::MPOHamiltonian)
+    FusedMPOHamiltonian(map(h) do b
+        tensortype =  eltype(b)
+        E = scalartype(tensortype)
+
+        blocks = Tuple{Vector{Bool},Vector{E},Union{E,tensortype},Vector{E},Vector{Bool}}[]
+
+        ds = b.domspaces;
+        is = b.imspaces;
+        for (i,j) in MPSKit.keys(b)
+            
+            lmask = fill(false,length(ds))
+            rmask = fill(false,length(is))
+            lmask[i] = true;
+            rmask[j] = true
+
+            push!(blocks,(lmask,[one(E)],b[i,j],[one(E)],rmask))
+        end
+        FusedSparseBlock{E,tensortype,spacetype(tensortype)}(collect(b.domspaces),collect(b.imspaces),b.pspace,blocks)
+    end)
+end

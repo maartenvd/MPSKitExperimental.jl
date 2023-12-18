@@ -2,30 +2,32 @@
     we can surpisingly enough hook into the standard finite env!
 =#
 function MPSKit.environments(state::FiniteMPS{S},ham::FusedMPOHamiltonian) where S
-    @assert false # disabled because accidentally creating this object for qchem would make you run out of memory
     lll = l_LL(state);rrr = r_RR(state)
     rightstart = Vector{S}();leftstart = Vector{S}()
 
-    for i in 1:ham.odim
-        util_left = Tensor(x->storagetype(S)(undef,x),ham[1].domspaces[i]'); fill_data!(util_left,one);
-        util_right = Tensor(x->storagetype(S)(undef,x),ham[length(state)].imspaces[i]'); fill_data!(util_right,one);
-
+    for (i,sp) in enumerate(ham[1].domspaces)
+        util_left = Tensor(x->storagetype(S)(undef,x),sp'); fill_data!(util_left,one);
         @plansor ctl[-1 -2; -3]:= lll[-1;-3]*util_left[-2]
-        @plansor ctr[-1 -2; -3]:= rrr[-1;-3]*util_right[-2]
-
+        
         if i != 1
             ctl = zero(ctl)
         end
 
-        if i != ham.odim
+        push!(leftstart,ctl)
+    end
+
+    for (i,sp) in enumerate(ham[length(state)].imspaces)
+        util_right = Tensor(x->storagetype(S)(undef,x),sp'); fill_data!(util_right,one);
+        @plansor ctr[-1 -2; -3]:= rrr[-1;-3]*util_right[-2]
+
+        if i != length(ham[length(state)].imspaces)
             ctr = zero(ctr)
         end
 
-        push!(leftstart,ctl)
         push!(rightstart,ctr)
     end
 
-    return environments(state,ham,leftstart,rightstart)
+    return disk_environments(state,ham,leftstart,rightstart)
 end
 #=
     need to define the relevant transfer operators
