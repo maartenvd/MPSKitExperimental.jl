@@ -3,6 +3,8 @@ module MPSKitExperimental
     using FLoops,Transducers,FoldsThreads, ConcurrentCollections
     using Base.Threads, LinearAlgebra
 
+    using JLD2
+
     export LeftGaugedMW, AssymptoticScatter,extend,partialdot,s_proj,projdown
     include("momentumwindow/momentum_window.jl")
     include("momentumwindow/orthoview.jl")
@@ -14,6 +16,12 @@ module MPSKitExperimental
     include("momentumwindow/mpo_envs.jl")
     include("momentumwindow/find_groundstate.jl")
 
+    export @tightloop_tensor,@tightloop_planar
+    include("tightloop/symbolic.jl")
+    include("tightloop/tightloop.jl")
+    include("tightloop/tensoroperations.jl")
+    include("tightloop/planar.jl")
+    
     export parse_fcidump, fused_quantum_chemistry_hamiltonian, disk_environments
     using MPSKit:fill_data!
     # contains most of the "tricks" needed to avoid tensorkit bottlenecks. 

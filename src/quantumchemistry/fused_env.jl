@@ -98,11 +98,33 @@ function _make_ltrans_factories(opp,A)
     return (tfactory_2_2, mfactory_2_2, mfactory_2_1,tfactory_1_2);
 end
 
+@tightloop_planar left_trans y[-1 -2;-3] := v[4 2;1]*A[1 3;-3]*O[2 5;3 -2]*Ab[-1 5;4]
+mpotype(O::FusedSparseBlock{E,H,Sp}) where {E,H,Sp} = H
+
 function MPSKit.transfer_left(v::Vector,O::FusedSparseBlock,A,Ab=A)
-    Ab_flipped = transpose(Ab',(1,3),(2,));
+    Ab_flipped = convert(TensorMap,transpose(Ab',(1,3),(2,)));
     
-    (tfactory_2_2, mfactory_2_2, mfactory_2_1,tfactory_1_2) = _make_ltrans_factories(O,A)
-    
+    homspace_example = O.pspace*O.pspace←O.pspace*O.pspace
+    homspace_type = typeof(homspace_example)
+    factory_type = typeof(left_trans(v=(typeof(v[1]),space(v[1])),A = (typeof(A),space(A)),Ab = (typeof(Ab_flipped),space(Ab_flipped)), O = (mpotype(O),homspace_example)))
+    factories = Dict{homspace_type,factory_type}();
+    promise_creation = Dict{homspace_type,Any}();
+
+    for (lmask,lblock,e,rblock,rmask) in O.blocks
+        e isa Number && @assert false #not supported anymore
+        
+        space(e) in keys(promise_creation) && continue #someone else will make this element
+        promise_creation[space(e)] = @Threads.spawn begin
+            v_example = v[findfirst(lmask)]
+            left_trans(v = (typeof(v_example),space(v_example)),A = (typeof(A),space(A)),Ab = (typeof(Ab_flipped),space(Ab_flipped)), O = (typeof(e),space(e)))
+   
+        end
+    end
+
+    for (k,v) in promise_creation
+        factories[k] = fetch(v)
+    end
+
     mapper = Map() do (lmask,lblock,e,rblock,rmask)
         # reduce left
         v_masked = v[lmask];
@@ -112,56 +134,19 @@ function MPSKit.transfer_left(v::Vector,O::FusedSparseBlock,A,Ab=A)
             l = fast_axpy!(lblock[i],v_masked[i],l);
         end
 
-        temp_0 = tfactory_1_2[(codomain(l)←domain(l),(1,),(3,2))];
-        l_perm = temp_0(l);
-
-        temp_1 = mfactory_2_2[codomain(Ab_flipped)←domain(l_perm)];
-        lAb = temp_1();
-
-        mul!(lAb,Ab_flipped,l_perm);
-        free!(temp_0,l_perm);
-
-        temp_2 = tfactory_2_2[(codomain(lAb)←domain(lAb),(3,1),(4,2))];
-        lAb_perm = temp_2(lAb);
-
-        free!(temp_1,lAb)
-
-        temp_3 = mfactory_2_2[codomain(lAb_perm)←domain(e)];
-        lAbe = temp_3();
-        if e isa AbstractTensorMap
-            mul!(lAbe,lAb_perm,e);
-        else
-            @assert false # not implemented
-            @plansor lAbe[-1 -2;-3 -4] = lAb_perm[-1 -2;1 2]*τ[1 2;-3 -4]
-            mul!(lAbe,e,lAbe);
-        end
-
-        free!(temp_2,lAb_perm)
-
-        temp_4 = tfactory_2_2[(codomain(lAbe)←domain(lAbe),(2,4),(1,3))]
-        lAbe_perm = temp_4(lAbe);
-
-        free!(temp_3,lAbe)
-
-        temp_5 = mfactory_2_1[codomain(lAbe_perm)←domain(A)]
-        nl = temp_5();
-        mul!(nl,lAbe_perm,A);
-        free!(temp_4,lAbe_perm)
-
+        nl = factories[space(e)](v = l, A = A, Ab = Ab_flipped,O = e)
         # expand r
         toret = map(rblock) do r
             (r,nl)
         end
-
         (toret,rmask)
     end
 
     mapped = tcollect(mapper,O.blocks)
-
     out = Vector{eltype(v)}(undef,length(O.imspaces))
     isassigned = fill(false,length(O.imspaces));
 
-    @floop for i in 1:length(O.imspaces)
+    for i in 1:length(O.imspaces)
         for (lb,lm) in mapped
             lm[i] || continue
             (ct,cnr) = lb[sum(lm[1:i])];
@@ -184,7 +169,7 @@ function MPSKit.transfer_left(v::Vector,O::FusedSparseBlock,A,Ab=A)
         out[i] = mfactory_2_1[homsp]();
         mul!(out[i],false,out[i]);
     end
-    
+
     out
 end
 

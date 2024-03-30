@@ -228,7 +228,7 @@ function MPSKit.ac_proj(row::Int,col::Int,below::LeftGaugedMW,env::MWenv)
 
     for (j,k) in keys(ham[fyspos])
         @tensor t[-1 -2;-3] := lBE[j][-1,6,7]*env.above.right_gs.AR[fyspos][7,2,3]*right_below[k][3,4,-3]*ham[fyspos][j,k][6,-2,2,4]
-        @tensor t[-1 -2;-3] += left_below[j][-1 5;6 7]*env.above.VLs[fyspos][7 4;6 1]*env.above.CR[fyspos,0][1;3]*righties[1][k][3 2;-3]*ham[fyspos][j,k][5 -2;4 2]
+        @tensor t[-1 -2;-3] += left_below[j][-1 3;4 5]*env.above.VLs[fyspos][5 2;4 6]*env.above.CR[fyspos,0][6;1]*righties[1][k][1 7;-3]*ham[fyspos][j,k][3 -2;2 7]
         @tensor t[-1 -2;-3] += left_below[j][-1,2,6,3]*env.above.left_gs.AL[fyspos][3,1,4]*rBE[k][4,5,6,-3]*ham[fyspos][j,k][2,-2,1,5]
         for i in 1:size(env.above,2)
             @tensor t[-1 -2;-3] += lefties[i][j][-1,4,5]*env.above.AC[fyspos-i,i][5,1,2]*righties[i+1][k][2,3,-3]*ham[fyspos][j,k][4,-2,1,3]

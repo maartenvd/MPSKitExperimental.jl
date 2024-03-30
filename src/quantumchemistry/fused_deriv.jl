@@ -412,7 +412,7 @@ function MPSKit.∂∂AC2(pos::Int,mps,ham::FusedMPOHamiltonian{E,O,Sp},cache) w
     fused_∂∂AC2(convert(Vector{typeof(blocks[1])},blocks))
 end
 
-
+#@tightloop_planar inner_ac2 y[-1 -2;-3 -4] := lblock[-1 -2;1 2 3]*x[1 2;4 5]*[4 5 3;-3 -4]
 function _inner_ac2!(toret,x,l,temp,r,temp_trans)
     temp_1 = temp();
     mul!(temp_1,l,x);

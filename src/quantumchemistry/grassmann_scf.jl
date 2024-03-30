@@ -153,7 +153,7 @@ function quantum_chemistry_dV_dK(ham::CASSCF_Ham,state)
 
     half_basis_size = Int(ceil((basis_size+1)/2));
     
-    Elt = eltype(state.AL[1])
+    Elt = scalartype(state.AL[1])
 
     dK = fill(zero(Elt),basis_size,basis_size);
     dV = fill(zero(Elt),basis_size,basis_size,basis_size,basis_size);
@@ -369,7 +369,7 @@ function quantum_chemistry_dV_dK(ham::CASSCF_Ham,state)
 
     function lr(l,r)
         if l == 0 || r == 0
-            return zero(eltype(ac))
+            return zero(scalartype(ac))
         end
 
         if l isa Int
@@ -395,7 +395,7 @@ function quantum_chemistry_dV_dK(ham::CASSCF_Ham,state)
 
     function fast_expval(leftind,rightind,opp)
         if leftind == 0 || rightind == 0
-            return zero(eltype(ac))
+            return zero(scalartype(ac))
         end
         
         left = lo(leftind,opp)
