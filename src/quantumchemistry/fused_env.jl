@@ -135,6 +135,7 @@ function MPSKit.transfer_left(v::Vector,O::FusedSparseBlock,A,Ab=A)
         end
 
         nl = factories[space(e)](v = l, A = A, Ab = Ab_flipped,O = e)
+        
         # expand r
         toret = map(rblock) do r
             (r,nl)

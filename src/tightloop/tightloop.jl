@@ -196,8 +196,7 @@ macro tightloop_planar(name,args::Vararg{Expr})
 
     input_symbols =  TensorOperations.getinputtensorobjects(args[end])
     output_symbols =  TensorOperations.getoutputtensorobjects(args[end])
-    
-    arg_symbols = [input_symbols...,output_symbols...];
+    arg_symbols = unique([input_symbols...,output_symbols...])
     kwarg_expr = Expr(:parameters,[Expr(:kw,s,nothing) for s in arg_symbols]...)
     abstract_eval_call = Expr(:parameters,[Expr(:kw,s,Expr(:call,GlobalRef(MPSKitExperimental,:SymbolicTensorMap),Expr(:call,:getindex,s,1),Expr(:call,:getindex,s,2))) for s in arg_symbols]...)
 

@@ -14,7 +14,7 @@ function generate_transpose_table(elt,sp_src,sp_dst, p1::IndexTuple{N₁},p2::In
 
     N = length(p1)+length(p2);
     table = Tuple{elt,Int,UnitRange{Int},UnitRange{Int},NTuple{N,Int},Int,UnitRange{Int},UnitRange{Int},NTuple{N,Int}}[];
-    for (i_src,(s_src,f1_list_src)) in enumerate(rowr_src)
+    @inbounds for (i_src,(s_src,f1_list_src)) in enumerate(rowr_src)
         f2_list_src = colr_src[s_src];
 
         for (f1_src,r_src) in f1_list_src, (f2_src,c_src) in f2_list_src
@@ -37,20 +37,23 @@ function generate_transpose_table(elt,sp_src,sp_dst, p1::IndexTuple{N₁},p2::In
             end
         end
     end
-
+    
     (table,p1,p2)
 end
 
 function execute_transpose_table!(t_dst,t_src,bulk,alpha=true,beta=false)
+    
     (table,p1,p2) = bulk
     rmul!(t_dst,beta);
 
-    @inbounds for (α,s_src,r_src,c_src,d_src,s_dst,r_dst,c_dst,d_dst) in table
-        view_dst = sreshape(StridedView(t_dst.data.values[s_dst])[r_dst,c_dst],d_dst)
-        view_src = sreshape(StridedView(t_src.data.values[s_src])[r_src,c_src],d_src);
-        
-        #TensorOperations.tensoradd!(view_dst,(p1,p2),view_src,:N,α*alpha,true)
-        axpy!(α*alpha,permutedims(view_src,(p1...,p2...)), view_dst);
+    for (α,s_src,r_src,c_src,d_src,s_dst,r_dst,c_dst,d_dst) in table
+        if first(p1) == 1
+            axpy!(α*alpha,(@view t_src.data.values[s_src][r_src,c_src]),(@view t_dst.data.values[s_dst][r_dst,c_dst]))
+        else
+            view_dst = sreshape(StridedView(t_dst.data.values[s_dst])[r_dst,c_dst],d_dst)
+            view_src = sreshape(StridedView(t_src.data.values[s_src])[r_src,c_src],d_src);
+            axpy!(α*alpha,permutedims(view_src,(p1...,p2...)), view_dst);
+        end
     end
 
     t_dst
@@ -79,7 +82,7 @@ function create_mediated_planarcontract!(C::SymbolicTensorMap, pC, A::SymbolicTe
     fast_init_B = fast_init(codomain(sp_dst_B),domain(sp_dst_B),storagetype(ttype(B)))
     tbl_B = generate_transpose_table(scalartype(ttype(B)),B.structure,sp_dst_B,cindB,oindB)
     inplace_B =  (cindB == codB && oindB == domB)
-   
+    
     (C,(fast_init_A,tbl_A,fast_init_B,tbl_B,inplace_A,inplace_B))
 end
 
@@ -87,16 +90,19 @@ function mediated_planarcontract!(fst,mediator,C, pC, A, pA, B, pB, α=1, β=0 ,
     (fast_init_A,tbl_A,fast_init_B,tbl_B,inplace_A,inplace_B) = mediator
 
     if inplace_A
+        #@show "inplace A"
         Ap = A
     else
+        #@show "transpose A"
         Ap = fast_init_A(fst.allocator,true)
         execute_transpose_table!(Ap,A,tbl_A)    
     end
 
     if inplace_B
-        Bp = B
-                
+        #@show "inplace B"
+        Bp = B       
     else
+        #@show "transpose B"
         Bp = fast_init_B(fst.allocator,true)
         execute_transpose_table!(Bp,B,tbl_B)
     end
