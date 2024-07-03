@@ -167,9 +167,9 @@ end
 function MPSKit.∂∂AC2(pos::Int,mps,ham::FusedMPOHamiltonian{E,O,Sp},cache) where {E,O,Sp}
     opp1 = ham[pos];
     opp2 = ham[pos+1];
-    @time le = leftenv(cache,pos,mps);
-    @time re = rightenv(cache,pos+1,mps);
-    @time begin
+    le = leftenv(cache,pos,mps);
+    re = rightenv(cache,pos+1,mps);
+    begin
         
         # tranpose factories:
         S = spacetype(eltype(mps));
@@ -209,145 +209,170 @@ function MPSKit.∂∂AC2(pos::Int,mps,ham::FusedMPOHamiltonian{E,O,Sp},cache) w
             rightblock_factories[k] = fetch(v)
         end
     end
-        process_left_blocks = Map() do (lmask,lblock,e,rblock,rmask)
-            cl = le[lmask];
-            
-            l = rmul!(fast_copy(cl[1]),lblock[1])
-            for i in 2:length(cl)
-                l = fast_axpy!(lblock[i],cl[i],l);
-            end
+    process_left_blocks = Map() do (lmask,lblock,e,rblock,rmask)
+        cl = le[lmask];
+        
+        l = rmul!(fast_copy(cl[1]),lblock[1])
+        for i in 2:length(cl)
+            l = fast_axpy!(lblock[i],cl[i],l);
+        end
 
-            tl = leftblock_factories[space(e)](l=l,o=e)
-            (tl,rblock,rmask)
+        tl = leftblock_factories[space(e)](l=l,o=e)
+        (tl,rblock,rmask)
+    end
+    
+    blocked_left_blocks = tcollect(process_left_blocks,opp1.blocks)
+
+    filter!(blocked_left_blocks) do (l,rblock,rmask)
+        norm(l)>1e-12 && !isempty(rblock)
+    end
+
+    process_right_blocks = Map() do (lmask,lblock,e,rblock,rmask)
+        cr = re[rmask];
+
+        r = rmul!(fast_copy(cr[1]),rblock[1])
+        for i in 2:length(rblock)
+            r = fast_axpy!(rblock[i],cr[i],r)
+        end
+
+        rl = rightblock_factories[space(e)](r=r,o=e)
+        
+        (lmask,lblock,rl)
+    end
+
+    blocked_right_blocks = tcollect(process_right_blocks,opp2.blocks)
+
+    filter!(blocked_right_blocks) do (lmask,lblock,r)
+        !isempty(lblock) && norm(r)>1e-12
+    end
+
+    left_group = Dict{typeof(opp1.pspace),Vector{Int}}();
+    right_group = Dict{typeof(opp1.pspace),Vector{Int}}();
+
+    for (i,(l,rblock,rmask)) in enumerate(blocked_left_blocks)
+        left_group[space(l,3)'] = [i;get(left_group,space(l,3)',Int[])]
+    end
+    
+    for (i,(lmask,lblock,r)) in enumerate(blocked_right_blocks)
+        right_group[space(r,3)] = [i;get(right_group,space(r,3),Int[])]
+    end
+
+    p1 = opp1.pspace;
+    p2 = opp2.pspace;
+    v1 = left_virtualspace(mps,pos-1);
+    v2 = right_virtualspace(mps,pos+1);
+    ac2_type = tensormaptype(S,2,2,storage)
+    ac2_structure = v1*p1 ← v2*(p2)'
+
+    common_keys = collect(intersect(keys(left_group),keys(right_group)))
+    d_matrices = Dict(map(k-> k=> fill(zero(E),length(left_group[k]),length(right_group[k])),common_keys))
+    splats = reduce(vcat,[
+        reduce(vcat,[
+            [(k,(il,lv),(ir,rv)) for (ir,rv) in enumerate(get(right_group,k,Int[]))] 
+            for (il,lv) in enumerate(v)]) 
+                for (k,v) in left_group])
+
+    @threads for (k,(il,lv),(ir,rv)) in splats
+        (l,rblock,rmask) = blocked_left_blocks[lv]
+        (lmask,lblock,r) = blocked_right_blocks[rv]
+        d_matrices[k][il,ir] = sum(rblock[lmask[rmask]].*lblock[rmask[lmask]]);
+    end
+
+    # this bit is single threaded but should take almost no time
+    pairs = map(collect(keys(d_matrices))) do k
+        d = d_matrices[k]
+        
+        (U_s,R_s) = qr(d);
+        U = Matrix(U_s);
+        R = Matrix(R_s);
+
+        flt = map(x-> norm(R[x,:])>1e-12,1:size(R,1))
+        U = U[:,flt]
+        R = R[flt,:]
+
+        if size(R,1)==0 || size(R,2) == 0
+            return k=> (U,R)
+        end
+
+        (L_s,V_s) = lq(R)
+        L = Matrix(L_s);
+        V = Matrix(V_s)
+
+        flt = map(x-> norm(L[:,x])>1e-12,1:size(L,2))
+        V = V[flt,:]
+        L = L[:,flt]
+        
+        U = U*L;
+
+        k => (U,V)
+    end
+    filter!(pairs) do x
+        (k,(a,b)) = x
+        size(a,2) > 0
+    end
+    kvs = Dict(pairs)
+
+
+    totblock_inds = reduce(vcat,[[(k,i) for i in 1:size(kvs[k][1],2)] for k in keys(kvs)])
+
+    
+    mapper = Map() do (k,i)
+        (U,V) = kvs[k]
+        cur_left_blocks = blocked_left_blocks[left_group[k]]
+        cur_right_blocks = blocked_right_blocks[right_group[k]]
+
+        l = rmul!(fast_copy(cur_left_blocks[1][1]),U[1,i]);
+        for j in 2:size(U,1)
+            u = U[j,i];
+            if abs(u)>1e-12
+                fast_axpy!(u,cur_left_blocks[j][1],l)
+            end
         end
         
-        @time blocked_left_blocks = tcollect(process_left_blocks,opp1.blocks)
-
-        filter!(blocked_left_blocks) do (l,rblock,rmask)
-            norm(l)>1e-12 && !isempty(rblock)
-        end
-
-        process_right_blocks = Map() do (lmask,lblock,e,rblock,rmask)
-            cr = re[rmask];
-
-            r = rmul!(fast_copy(cr[1]),rblock[1])
-            for i in 2:length(rblock)
-                r = fast_axpy!(rblock[i],cr[i],r)
+        r = rmul!(fast_copy(cur_right_blocks[1][3]),V[i,1]);
+        for j in 2:size(V,2)
+            v = V[i,j];
+            if abs(v)>1e-12
+                fast_axpy!(v,cur_right_blocks[j][3],r)
             end
-
-            rl = rightblock_factories[space(e)](r=r,o=e)
-            
-            (lmask,lblock,rl)
-        end
-
-        @time blocked_right_blocks = tcollect(process_right_blocks,opp2.blocks)
-
-        filter!(blocked_right_blocks) do (lmask,lblock,r)
-            !isempty(lblock) && norm(r)>1e-12
-        end
-
-        left_group = Dict{typeof(opp1.pspace),Vector{Int}}();
-        right_group = Dict{typeof(opp1.pspace),Vector{Int}}();
-
-        for (i,(l,rblock,rmask)) in enumerate(blocked_left_blocks)
-            left_group[space(l,3)'] = [i;get(left_group,space(l,3)',Int[])]
         end
         
-        for (i,(lmask,lblock,r)) in enumerate(blocked_right_blocks)
-            right_group[space(r,3)] = [i;get(right_group,space(r,3),Int[])]
-        end
 
-        p1 = opp1.pspace;
-        p2 = opp2.pspace;
-        v1 = left_virtualspace(mps,pos-1);
-        v2 = right_virtualspace(mps,pos+1);
-        ac2_type = tensormaptype(S,2,2,storage)
-        ac2_structure = v1*p1 ← v2*(p2)'
 
-        common_keys = collect(intersect(keys(left_group),keys(right_group)))
-        d_matrices = Dict(map(k-> k=> fill(zero(E),length(left_group[k]),length(right_group[k])),common_keys))
-        splats = reduce(vcat,[
-            reduce(vcat,[
-                [(k,(il,lv),(ir,rv)) for (ir,rv) in enumerate(get(right_group,k,Int[]))] 
-                for (il,lv) in enumerate(v)]) 
-                    for (k,v) in left_group])
-
-        @threads for (k,(il,lv),(ir,rv)) in splats
-            (l,rblock,rmask) = blocked_left_blocks[lv]
-            (lmask,lblock,r) = blocked_right_blocks[rv]
-            d_matrices[k][il,ir] = sum(rblock[lmask[rmask]].*lblock[rmask[lmask]]);
-        end
-
-        # this bit is single threaded but should take almost no time
-        kvs = Dict(map(collect(keys(d_matrices))) do k
-            d = d_matrices[k]
-            
-            (U_s,R_s) = qr(d);
-            U = Matrix(U_s);
-            R = Matrix(R_s);
-
-            flt = map(x-> norm(R[x,:])>1e-12,1:size(R,1))
-            U = U[:,flt]
-            R = R[flt,:]
-                        
-            (L_s,V_s) = lq(R)
-            L = Matrix(L_s);
-            V = Matrix(V_s)
-
-            flt = map(x-> norm(L[:,x])>1e-12,1:size(L,2))
-            V = V[flt,:]
-            L = L[:,flt]
-            
-            U = U*L;
-
-            k => (U,V)
-        end)
-
-        totblock_inds = reduce(vcat,[[(k,i) for i in 1:size(kvs[k][1],2)] for k in keys(kvs)])
-
-        mapper = Map() do (k,i)
-            (U,V) = kvs[k]
-            cur_left_blocks = blocked_left_blocks[left_group[k]]
-            cur_right_blocks = blocked_right_blocks[right_group[k]]
-
-            l = rmul!(fast_copy(cur_left_blocks[1][1]),U[1,i]);
-            for j in 2:size(U,1)
-                u = U[j,i];
-                if abs(u)>1e-12
-                    fast_axpy!(u,cur_left_blocks[j][1],l)
-                end
-            end
-            
-            r = rmul!(fast_copy(cur_right_blocks[1][3]),V[i,1]);
-            for j in 2:size(V,2)
-                v = V[i,j];
-                if abs(v)>1e-12
-                    fast_axpy!(v,cur_right_blocks[j][3],r)
-                end
-            end
-            
-            #l_blocked = tfactory_3_2[(codomain(l)←domain(l),(2,5,4),(1,3))](l);
-            #r_blocked = tfactory_3_2[(codomain(r)←domain(r),(4,1,2),(5,3))](r)
-            
-
-            factory = ac2_update(l = (typeof(l),space(l)), r = (typeof(r),space(r)), ac2 = (ac2_type,ac2_structure), out = (ac2_type,ac2_structure))
-
-            # transpose + temps
-            (l,r,factory)
-        end
-
-        @time blocks = tcollect(mapper,totblock_inds)
+        factory = ac2_update(l = (typeof(l),space(l)), r = (typeof(r),space(r)), ac2 = (ac2_type,ac2_structure), out = (ac2_type,ac2_structure))
+        #fast_tmp_1 = fast_init(codomain(l),codomain(r),storagetype(l))
+        #fast_submult = LeftSubMult(space(l),ac2_structure)
         
-        fused_∂∂AC2(convert(Vector{typeof(blocks[1])},blocks))
+        # transpose + temps
+        #(l,r,(fast_tmp_1,fast_submult))
+        (l,r,factory)
+    end
+
+    blocks = tcollect(mapper,totblock_inds)
+    
+    fused_∂∂AC2(convert(Vector{typeof(blocks[1])},blocks))
     
 end
 
 function _reduce_ac2(blocks,x,basesize)
     if length(blocks) <= basesize
         toret = zero(x)
+
+       
+               #=
+
+        for (l,r,(fast_tmp_1,fast_submult)) in blocks
+            tmp = fast_tmp_1(MallocBackend(),true)
+            rmul!(tmp,false)
+            fast_submult(tmp,l,x)
+            mul!(toret,tmp,r,true,true)
+            TensorOperations.tensorfree!(tmp, MallocBackend())
+        end
+  =#
         for (l,r,factory) in blocks
             factory(l=l,r=r,ac2=x,out=toret)
         end
+
 
         return toret
     else

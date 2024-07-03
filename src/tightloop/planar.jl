@@ -1,6 +1,5 @@
 # transpos 
 function generate_transpose_table(elt,sp_src,sp_dst, p1::IndexTuple{N₁},p2::IndexTuple{N₂}) where {N₁,N₂}
-    
     blocksectoriterator_src = blocksectors(sp_src);
     rowr_src, rowdims = TensorKit._buildblockstructure(codomain(sp_src), blocksectoriterator_src)
     colr_src, coldims = TensorKit._buildblockstructure(domain(sp_src), blocksectoriterator_src)
@@ -90,19 +89,15 @@ function mediated_planarcontract!(fst,mediator,C, pC, A, pA, B, pB, α=1, β=0 ,
     (fast_init_A,tbl_A,fast_init_B,tbl_B,inplace_A,inplace_B) = mediator
 
     if inplace_A
-        #@show "inplace A"
         Ap = A
     else
-        #@show "transpose A"
         Ap = fast_init_A(fst.allocator,true)
         execute_transpose_table!(Ap,A,tbl_A)    
     end
 
     if inplace_B
-        #@show "inplace B"
         Bp = B       
     else
-        #@show "transpose B"
         Bp = fast_init_B(fst.allocator,true)
         execute_transpose_table!(Bp,B,tbl_B)
     end

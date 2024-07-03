@@ -65,7 +65,8 @@ module MPSKitExperimental
     # You can play with these files to make them fall back to the default tensorkit implementation
     include("quantumchemistry/delayed_factory.jl");
     include("quantumchemistry/transpose_factory.jl")
-
+    include("quantumchemistry/submult.jl")
+    
     # fused_mpoham is a new type of mpohamiltonian, that allows for a "blocking" step
     # I also needed environments - derivatives for this new mpohamiltonian
     include("quantumchemistry/fused_mpoham.jl");
