@@ -84,11 +84,14 @@ module MPSKitExperimental
     include("quantumchemistry/disk_backed_envs.jl")
     include("quantumchemistry/disk_backed_envs_manual.jl") # alternative to the diskmanager is to manually write data to disk
     
-    using MPSKit:GrassmannMPS
-    using GaussianBasis
-    export CASSCF_Ham, GrassmannSCF;
-    include("quantumchemistry/grassmann_scf.jl")
-    include("quantumchemistry/orbopt.jl")
+    #using MPSKit:GrassmannMPS
+    #using GaussianBasis
+    #export CASSCF_Ham, GrassmannSCF;
+    #include("quantumchemistry/grassmann_scf.jl")
+    #include("quantumchemistry/orbopt.jl")
     
+    using IRTools
+    include("fastmpoham/fastmpoham.jl")
+    include("fastmpoham/contractions.jl")
 
 end

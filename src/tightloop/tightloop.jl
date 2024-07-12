@@ -58,7 +58,7 @@ function subsplit(ex,instantiated_struct_name)
     return (Expr(a...),Expr(b...),c)
 end
 
-function split_execution(ex::Expr,instantiated_struct_name)
+function split_execution(ex,instantiated_struct_name)
     splitmap = Dict(GlobalRef(TensorOperations,:tensorcontract!) => (create_mediated_tensorcontract!,mediated_tensorcontract!),
                     GlobalRef(TensorOperations,:tensoralloc_contract) => (create_mediated_tensoralloc_contract,mediated_tensoralloc_contract),
                     GlobalRef(TensorOperations,:tensoradd!) => (create_mediated_tensoradd!,mediated_tensoradd!),
@@ -69,7 +69,9 @@ function split_execution(ex::Expr,instantiated_struct_name)
                     GlobalRef(TensorKit,:_planaradd!) => (create_mediated_planaradd!,mediated_planaradd!),
                     GlobalRef(TensorKit,:_planartrace!) => (create_mediated_planartrace!,mediated_planartrace!))
 
-    if ex.head == :(=) && length(ex.args) == 2
+    if !(ex isa Expr)
+        return (ex,ex,[])
+    elseif ex.head == :(=) && length(ex.args) == 2
         if ex.args[2] isa Expr && ex.args[2].head == :call
             t = ex.args[2].args[1]
 
@@ -87,12 +89,8 @@ function split_execution(ex::Expr,instantiated_struct_name)
         end
 
         return subsplit(ex,instantiated_struct_name)
-    elseif ex.head in (:block,)
-        
+    else# ex.head in (:block,)
         return subsplit(ex,instantiated_struct_name)
-    elseif ex isa Expr
-        #@show ex.head, ex.args
-        return (ex,ex,[])
     end
 end
 split_execution(ex::Symbol,instantiated_struct_name) = (ex,ex,[])

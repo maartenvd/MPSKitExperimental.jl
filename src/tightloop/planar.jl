@@ -46,7 +46,7 @@ function execute_transpose_table!(t_dst,t_src,bulk,alpha=true,beta=false)
     rmul!(t_dst,beta);
 
     for (α,s_src,r_src,c_src,d_src,s_dst,r_dst,c_dst,d_dst) in table
-        if first(p1) == 1
+        if !isempty(p1) && first(p1) == 1
             axpy!(α*alpha,(@view t_src.data.values[s_src][r_src,c_src]),(@view t_dst.data.values[s_dst][r_dst,c_dst]))
         else
             view_dst = sreshape(StridedView(t_dst.data.values[s_dst])[r_dst,c_dst],d_dst)

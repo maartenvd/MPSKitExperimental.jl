@@ -7,6 +7,7 @@ ttype(d::SymbolicTensorMap{A,B}) where {A,B} = A
 
 TensorOperations.tensorfree!(::SymbolicTensorMap, ::TensorOperations.Backend) = nothing
 TensorOperations.scalartype(a::SymbolicTensorMap) = TensorOperations.scalartype(ttype(a))
+TensorOperations.tensorscalar(a::SymbolicTensorMap) = zero(TensorOperations.scalartype(a))
 
 TensorKit.sectortype(a::SymbolicTensorMap) = sectortype(typeof(a))
 TensorKit.sectortype(::Type{SymbolicTensorMap{A,B}}) where {A,B} = sectortype(B)

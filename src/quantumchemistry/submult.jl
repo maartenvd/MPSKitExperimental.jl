@@ -74,11 +74,11 @@ end
 
 
 function (fct::LeftSubMult)(t_dst,t_A,t_B)
-    for ((sect_A,sect_B),sub_blocks) in fct.table
+    @inbounds for ((sect_A,sect_B),sub_blocks) in fct.table
         dst_block = t_dst.data[sect_A]
         A_block = t_A.data[sect_A]
         B_block = t_B.data[sect_B]
-        for (col_A,row_B,col_B,col_dst) in sub_blocks
+        @inbounds for (col_A,row_B,col_B,col_dst) in sub_blocks
             #dst_block[:,col_dst] += (@view A_block[:,col_A])*(@view B_block[row_B,col_B])
             mul!((@view dst_block[:,col_dst]),(@view A_block[:,col_A]),(@view B_block[row_B,col_B]),true,true)
         end
