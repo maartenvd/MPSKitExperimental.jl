@@ -90,7 +90,6 @@ module MPSKitExperimental
     #include("quantumchemistry/grassmann_scf.jl")
     #include("quantumchemistry/orbopt.jl")
     
-    using IRTools
     include("fastmpoham/fastmpoham.jl")
     include("fastmpoham/contractions.jl")
 
