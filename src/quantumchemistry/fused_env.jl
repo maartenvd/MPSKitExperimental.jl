@@ -187,6 +187,5 @@ function MPSKit.transfer_right(v::Vector,O::FusedSparseBlock,A,Ab=A)
         mul!(out[i],false,out[i])
 
     end
-
     out
 end

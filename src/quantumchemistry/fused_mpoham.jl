@@ -1,3 +1,10 @@
+#=
+
+Different hamiltonian type that can more efficiently deal with the qchem hamiltonian
+Might be strictly better than the original MPOHamiltonian
+The structure supports scalars as operators (identity operators), but the code doesn't anymore.
+
+=#
 struct FusedSparseBlock{E,O,Sp}
     domspaces::Vector{Sp}
     imspaces::Vector{Sp}

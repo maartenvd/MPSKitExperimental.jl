@@ -4,7 +4,7 @@ only left/rightenvs are stored on disk (the entire finitemps is still kept in me
 =#
 
 mutable struct ManualDiskBackedEnvs{B<:FusedMPOHamiltonian,C} <: Cache
-    opp::B #the operator
+    operator::B #the operator
 
     ldependencies::Vector{C} #the data we used to calculate leftenvs/rightenvs
     rdependencies::Vector{C}
@@ -29,7 +29,7 @@ function disk_environments(state::FiniteMPS{S},ham::FusedMPOHamiltonian) where S
     rightstart = Vector{S}();leftstart = Vector{S}()
 
     for (i,sp) in enumerate(ham[1].domspaces)
-        util_left = Tensor(x->storagetype(S)(undef,x),sp'); fill_data!(util_left,one);
+        util_left = ones(eltype(S),sp'); fill_data!(util_left,one);
         @plansor ctl[-1 -2; -3]:= lll[-1;-3]*util_left[-2]
         
         if i != 1
@@ -40,7 +40,7 @@ function disk_environments(state::FiniteMPS{S},ham::FusedMPOHamiltonian) where S
     end
 
     for (i,sp) in enumerate(ham[length(state)].imspaces)
-        util_right = Tensor(x->storagetype(S)(undef,x),sp'); fill_data!(util_right,one);
+        util_right = ones(eltype(S),sp'); fill_data!(util_right,one);
         @plansor ctr[-1 -2; -3]:= rrr[-1;-3]*util_right[-2]
 
         if i != length(ham[length(state)].imspaces)
@@ -106,7 +106,7 @@ function MPSKit.rightenv(ca::ManualDiskBackedEnvs{O,E},ind,state)::Vector{E} whe
 
         #we need to recalculate
         for j = a:-1:ind+1
-            store_right!(ca,TransferMatrix(state.AR[j],ca.opp[j],state.AR[j])*load_right!(ca,j+1),j)
+            store_right!(ca,TransferMatrix(state.AR[j],ca.operator[j],state.AR[j])*load_right!(ca,j+1),j)
             ca.rdependencies[j] = state.AR[j]
         end
     end
@@ -120,7 +120,7 @@ function MPSKit.leftenv(ca::ManualDiskBackedEnvs{O,E},ind,state)::Vector{E} wher
     if !isnothing(a)
         #we need to recalculate
         for j = a:ind-1
-            store_left!(ca,load_left!(ca,j)*TransferMatrix(state.AL[j],ca.opp[j],state.AL[j]),j+1)
+            store_left!(ca,load_left!(ca,j)*TransferMatrix(state.AL[j],ca.operator[j],state.AL[j]),j+1)
             ca.ldependencies[j] = state.AL[j]
         end
     end

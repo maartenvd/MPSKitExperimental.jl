@@ -1,49 +1,22 @@
+struct fast_init{T, S, N₁, N₂, A}
+    space::TensorMapSpace{S,N₁,N₂}
+    totaldim::Int
 
-
-struct fast_init{S, N₁, N₂, I, A, F₁, F₂}
-    codom::ProductSpace{S,N₁}
-    dom::ProductSpace{S,N₂}
-    rowr::TensorKit.SectorDict{I,TensorKit.FusionTreeDict{F₁,UnitRange{Int}}}
-    colr::TensorKit.SectorDict{I,TensorKit.FusionTreeDict{F₂,UnitRange{Int}}}
-    dims::Vector{Tuple{I,Int,Int}}
-    
     function fast_init(codom::ProductSpace{S,N₁},
         dom::ProductSpace{S,N₂},stortype) where {S<:IndexSpace,N₁,N₂}
-        I = sectortype(S)
-        if I == Trivial
-            d1 = dim(codom)
-            d2 = dim(dom)
 
-            return new{S, N₁, N₂, I, stortype,Nothing,Nothing}(codom,dom)
-        end
-        
-        blocksectoriterator = blocksectors(codom ← dom)
-        rowr, rowdims = TensorKit._buildblockstructure(codom, blocksectoriterator)
-        colr, coldims = TensorKit._buildblockstructure(dom, blocksectoriterator)
-        
-        
-        F₁ = TensorKit.fusiontreetype(I, N₁)
-        F₂ = TensorKit.fusiontreetype(I, N₂)
-       
-        A = TensorKit.SectorDict{I,stortype}
-        
-       
-        return new{S, N₁, N₂, I, A, F₁, F₂}(codom,dom,rowr,colr, [(c,rowdims[c], coldims[c]) for c in blocksectoriterator])
+        homspace = codom←dom
+        return new{eltype(stortype),S,N₁,N₂,stortype}(homspace,TensorKit.fusionblockstructure(homspace).totaldim)
     end
 
-    function (d::fast_init{S, N₁, N₂, I, A, Nothing, Nothing})(alloc=TensorOperations.Backend{:none}(),istemp=false) where {S, N₁, N₂, I, A<:DenseMatrix}
-        data = tensoralloc(A, (dim(d.codom), dim(d.dom)), istemp,alloc)
-        return TensorMap{S,N₁,N₂,Trivial,A,Nothing,Nothing}(data, d.codom, d.dom)
+    function (d::fast_init{T, S, N₁, N₂, A})(alloc=TensorOperations.DefaultAllocator(),istemp=Val(false)) where {T,S, N₁, N₂, A<:DenseVector}
+        data = tensoralloc(A, d.totaldim, istemp,alloc)
+        return TensorMap{T,S,N₁,N₂,A}(data, d.space)
     end
 
-    function (d::fast_init{S, N₁, N₂, I, TensorKit.SectorDict{I,A}, F₁, F₂})(alloc=TensorOperations.Backend{:none}(),istemp=false) where {S, N₁, N₂, I, A, F₁, F₂}
-        data::TensorKit.SectorDict{I,A} = TensorKit.SectorDict(c =>tensoralloc(A, (rd,rc), istemp,alloc) for (c,rd,rc) in d.dims)
-        return TensorMap{S,N₁,N₂,I,TensorKit.SectorDict{I,A} ,F₁,F₂}(data, d.codom, d.dom, d.rowr, d.colr)
-    end
-    
 end
 
-function TensorOperations.tensorfree!(a::AbstractArray, ::TensorOperations.Backend{:none})
+function TensorOperations.tensorfree!(a::AbstractArray, ::TensorOperations.DefaultAllocator)
 end
 
 function subsplit(ex,instantiated_struct_name)
@@ -65,9 +38,9 @@ function split_execution(ex,instantiated_struct_name)
                     GlobalRef(TensorOperations,:tensoralloc_add) => (create_mediated_tensoralloc_add,mediated_tensoralloc_add),
                     GlobalRef(TensorOperations,:tensortrace!) => (create_mediated_tensortrace!,mediated_tensortrace!),
                     
-                    GlobalRef(TensorKit,:_planarcontract!) => (create_mediated_planarcontract!,mediated_planarcontract!),
-                    GlobalRef(TensorKit,:_planaradd!) => (create_mediated_planaradd!,mediated_planaradd!),
-                    GlobalRef(TensorKit,:_planartrace!) => (create_mediated_planartrace!,mediated_planartrace!))
+                    GlobalRef(TensorKit,:planarcontract!) => (create_mediated_planarcontract!,mediated_planarcontract!),
+                    GlobalRef(TensorKit,:planaradd!) => (create_mediated_planaradd!,mediated_planaradd!),
+                    GlobalRef(TensorKit,:planartrace!) => (create_mediated_planartrace!,mediated_planartrace!))
 
     if !(ex isa Expr)
         return (ex,ex,[])
@@ -100,7 +73,7 @@ split_execution(ex::Symbol,instantiated_struct_name) = (ex,ex,[])
 macro tightloop_tensor(name,args::Vararg{Expr})
     isempty(args) && throw(ArgumentError("No arguments passed to `@tensor`"))
     
-    allocator = TensorOperations.Backend{:none}();
+    allocator = TensorOperations.DefaultAllocator();
     #if length(args) == 1
     #    parser = TensorOperations.defaultparser
     #else
@@ -109,7 +82,7 @@ macro tightloop_tensor(name,args::Vararg{Expr})
         parser = TensorOperations.tensorparser(tensorexpr, kwargs...)
         for (name,val) in kwargs
             if name == :allocator
-                allocator = TensorOperations.Backend{val}()
+                allocator = eval(val)
             end
         end
     #end
@@ -168,14 +141,15 @@ end
 macro tightloop_planar(name,args::Vararg{Expr})
     isempty(args) && throw(ArgumentError("No arguments passed to `@planar`"))
     
-    allocator = TensorOperations.Backend{:none}();
+    allocator = TensorOperations.DefaultAllocator();
 
     tensorexpr = args[end]
     kwargs = TensorOperations.parse_tensor_kwargs(args[1:(end - 1)])
     parser = TensorKit.planarparser(tensorexpr, kwargs...)
     for (name,val) in kwargs
         if name == :allocator
-            allocator = TensorOperations.Backend{val}()
+            allocator = eval(val)
+            #allocator =  TensorOperations.Backend{val}()
         end
     end
     

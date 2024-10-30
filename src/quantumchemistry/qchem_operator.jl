@@ -9,6 +9,8 @@ maybe this can be automated, using something like coallesce?
 =#
 
 
+
+
 # x * o_1 = o_2
 find_left_map(o_1,o_2) = (o_2*o_1')*pinv(o_1*o_1');
 
@@ -22,14 +24,14 @@ function fused_quantum_chemistry_hamiltonian(E0,K,V,Elt=eltype(V))
     # the phsyical space
     psp = Vect[(Irrep[U₁]⊠Irrep[SU₂] ⊠ FermionParity)]((0,0,0)=>1, (1,1//2,1)=>1, (2,0,0)=>1);
 
-    ap = TensorMap(ones,Elt,psp*Vect[(Irrep[U₁]⊠Irrep[SU₂] ⊠ FermionParity)]((-1,1//2,1)=>1),psp);
-    blocks(ap)[(Irrep[U₁](0)⊠Irrep[SU₂](0)⊠FermionParity(0))] .*= -sqrt(2);
-    blocks(ap)[(Irrep[U₁](1)⊠Irrep[SU₂](1//2)⊠FermionParity(1))]  .*= 1;
+    ap = ones(Elt,psp*Vect[(Irrep[U₁]⊠Irrep[SU₂] ⊠ FermionParity)]((-1,1//2,1)=>1),psp);
+    block(ap,Irrep[U₁](0)⊠Irrep[SU₂](0)⊠FermionParity(0)) .*= -sqrt(2);
+    block(ap,Irrep[U₁](1)⊠Irrep[SU₂](1//2)⊠FermionParity(1))  .*= 1;
 
 
-    bm = TensorMap(ones,Elt,psp,Vect[(Irrep[U₁]⊠Irrep[SU₂]⊠FermionParity)]((-1,1//2,1)=>1)*psp);
-    blocks(bm)[(Irrep[U₁](0)⊠Irrep[SU₂](0)⊠FermionParity(0))] .*= sqrt(2);
-    blocks(bm)[(Irrep[U₁](1)⊠Irrep[SU₂](1//2)⊠FermionParity(1))] .*= -1;
+    bm = ones(Elt,psp,Vect[(Irrep[U₁]⊠Irrep[SU₂]⊠FermionParity)]((-1,1//2,1)=>1)*psp);
+    block(bm,Irrep[U₁](0)⊠Irrep[SU₂](0)⊠FermionParity(0)) .*= sqrt(2);
+    block(bm,Irrep[U₁](1)⊠Irrep[SU₂](1//2)⊠FermionParity(1)) .*= -1;
 
     # this transposition is easier to reason about in a planar way
     am = transpose(ap',(2,1),(3,));
@@ -44,10 +46,10 @@ function fused_quantum_chemistry_hamiltonian(E0,K,V,Elt=eltype(V))
     @plansor b_derp[-1 -2;-3] := bp[1;2 -2]*τ[-3 -1;2 1]
     @plansor b_derp[-1 -2;-3] := bm[1;2 -2]*τ[-3 -1;2 1]
 
-    h_pm = TensorMap(ones,Elt,psp,psp);
-    blocks(h_pm)[(Irrep[U₁](0)⊠Irrep[SU₂](0)⊠ FermionParity(0))] .=0;
-    blocks(h_pm)[(Irrep[U₁](1)⊠Irrep[SU₂](1//2)⊠ FermionParity(1))] .=1;
-    blocks(h_pm)[(Irrep[U₁](2)⊠Irrep[SU₂](0)⊠ FermionParity(0))] .=2;
+    h_pm = ones(Elt,psp,psp);
+    block(h_pm,Irrep[U₁](0)⊠Irrep[SU₂](0)⊠ FermionParity(0)) .=0;
+    block(h_pm,Irrep[U₁](1)⊠Irrep[SU₂](1//2)⊠ FermionParity(1)) .=1;
+    block(h_pm,Irrep[U₁](2)⊠Irrep[SU₂](0)⊠ FermionParity(0)) .=2;
 
     @plansor o_derp[-1 -2;-3 -4] := am[-1 1;-3]*ap[1 -2;-4]
     h_pm_derp = transpose(h_pm,(2,1),());
@@ -119,7 +121,7 @@ function fused_quantum_chemistry_hamiltonian(E0,K,V,Elt=eltype(V))
     end
 
     # fill indmap_1L and indmap_1R
-    ut = Tensor(ones,oneunit(psp));
+    ut = ones(oneunit(psp));
     @plansor ut_ap[-1 -2;-3 -4] := ut[-1]*ap[-3 -2;-4];
     @plansor ut_am[-1 -2;-3 -4] := ut[-1]*am[-3 -2;-4];
     @plansor bp_ut[-1 -2;-3 -4] := bp[-1;-3 -2]*conj(ut[-4]);
@@ -1317,8 +1319,8 @@ function fused_quantum_chemistry_hamiltonian(E0,K,V,Elt=eltype(V))
             end
 
             #right_v = adjoint(first(domspaces[mod1(i+1,end),rm]))
-            virt = isomorphism(Matrix{Elt},left_v,left_v);
-            phys = isomorphism(Matrix{Elt},psp,psp);
+            virt = isomorphism(storagetype(O),left_v,left_v);
+            phys = isomorphism(storagetype(O),psp,psp);
             @plansor to[-1 -2;-3 -4] := virt[-1;1]*phys[-2;2]*τ[1 2;-3 -4]
             push!(vecs,(lm,lb,convert(Union{Elt,O},o*to),rb,rm));
         end

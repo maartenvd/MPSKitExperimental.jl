@@ -5,7 +5,7 @@ struct SymbolicTensorMap{A,B}
 end
 ttype(d::SymbolicTensorMap{A,B}) where {A,B} = A
 
-TensorOperations.tensorfree!(::SymbolicTensorMap, ::TensorOperations.Backend) = nothing
+TensorOperations.tensorfree!(::SymbolicTensorMap, ::TensorOperations.AbstractBackend) = nothing
 TensorOperations.scalartype(a::SymbolicTensorMap) = TensorOperations.scalartype(ttype(a))
 TensorOperations.tensorscalar(a::SymbolicTensorMap) = zero(TensorOperations.scalartype(a))
 

@@ -80,7 +80,7 @@ function MPSKit.∂∂AC(pos::Int,mps,ham::FusedMPOHamiltonian,cache)
 
 
     # tranpose factories:
-    (mfactory_2_3, mfactory_3_1, tfactory_2_1, tfactory_3_2, tfactory_2_2) = _make_AC_factories(opp,mps.AC[pos]);
+    #(mfactory_2_3, mfactory_3_1, tfactory_2_1, tfactory_3_2, tfactory_2_2) = _make_AC_factories(opp,mps.AC[pos]);
 
     process_blocks = Map() do (lmask,lblock,e,rblock,rmask)
         cl = le[lmask];
@@ -96,7 +96,10 @@ function MPSKit.∂∂AC(pos::Int,mps,ham::FusedMPOHamiltonian,cache)
         for i in 2:length(rblock)
             r = fast_axpy!(rblock[i],cr[i],r);
         end        
+        
+        @planar tle[-1 -2 -3;-4 -5] := l[-1 1;-4]*e[1 -2;-5 -3]
 
+        #=
         e_t = transpose(e,(1,),(3,4,2));
 
         l_tf = tfactory_2_1[(codomain(l)←domain(l),(3,1),(2,))];
@@ -117,12 +120,15 @@ function MPSKit.∂∂AC(pos::Int,mps,ham::FusedMPOHamiltonian,cache)
 
 
         (tle,temp_mul,temp_trans,r)
+        =#
+
+        (tle,r)
     end
 
 
     blocks = tcollect(process_blocks,opp.blocks)
 
-    filter!(blocks) do (tle,temp_mul,temp_trans,r)
+    filter!(blocks) do (tle,r)
         !(norm(tle)<1e-12 || norm(r)<1e-12)
     end
     
@@ -130,16 +136,19 @@ function MPSKit.∂∂AC(pos::Int,mps,ham::FusedMPOHamiltonian,cache)
 end
 
 function (h::fused_∂∂AC)(x)
-    @floop for (tle,temp_mul,temp_trans,r) in h.blocks
+    @floop for (tle,r) in h.blocks
         @init t = similar(x)
 
+        @planar t[-1 -2;-3] = tle[-1 -2 3;1 2]*x[1 2;4]*r[4 3;-3]
+
+        #=
         t1 = temp_mul();
         mul!(t1,tle,x)
         t2 = temp_trans(t1);
         free!(temp_mul,t1);
         mul!(t,t2,r);
         free!(temp_trans,t2);
-
+        =#
         @reduce() do (toret = zero(x); t)
             fast_axpy!(true,t,toret);
             toret
@@ -160,15 +169,16 @@ struct fused_∂∂AC2{A}
     blocks::A
 end
 
-@tightloop_planar leftblock_ac2 allocator=malloc out[-1 -2 -3;-4 -5] := l[-1 1;-4]*o[1 -2;-5 -3]
-@tightloop_planar rightblock_ac2 allocator=malloc out[-1 -2 -3;-4 -5] := r[-1 1;-4]*o[-3 -5;-2 1]
-@tightloop_planar ac2_update allocator=malloc out[-1 -2;-3 -4] += l[-1 -2 5;1 2]*ac2[1 2;3 4]*r[3 4 5;-3 -4]
+@tightloop_planar leftblock_ac2 allocator=malloc() out[-1 -2 -3;-4 -5] := l[-1 1;-4]*o[1 -2;-5 -3]
+@tightloop_planar rightblock_ac2 allocator=malloc() out[-1 -2 -3;-4 -5] := r[-1 1;-4]*o[-3 -5;-2 1]
+@tightloop_planar ac2_update allocator=malloc() out[-1 -2;-3 -4] += l[-1 -2 5;1 2]*ac2[1 2;3 4]*r[3 4 5;-3 -4]
 
 function MPSKit.∂∂AC2(pos::Int,mps,ham::FusedMPOHamiltonian{E,O,Sp},cache) where {E,O,Sp}
     opp1 = ham[pos];
     opp2 = ham[pos+1];
     le = leftenv(cache,pos,mps);
     re = rightenv(cache,pos+1,mps);
+
     begin
         
         # tranpose factories:
@@ -209,6 +219,7 @@ function MPSKit.∂∂AC2(pos::Int,mps,ham::FusedMPOHamiltonian{E,O,Sp},cache) w
             rightblock_factories[k] = fetch(v)
         end
     end
+
     process_left_blocks = Map() do (lmask,lblock,e,rblock,rmask)
         cl = le[lmask];
         
