@@ -2,85 +2,10 @@ struct fused_∂∂AC{A}
     blocks::A
 end
 
-function _make_AC_factories(opp::FusedSparseBlock{E,O,Sp},ac) where {E,O,Sp}
-    S = spacetype(O);
-    storage = storagetype(O);
-
-
-    mvaltype_2_3 = DelayedFactType(S,storage,2,3);
-    mvaltype_3_1 = DelayedFactType(S,storage,3,1);
-    tvaltype_2_1 = TransposeFactType(S,storage,2,1);
-    tvaltype_3_2 = TransposeFactType(S,storage,3,2);
-    tvaltype_2_2 = TransposeFactType(S,storage,2,2);
-
-    
-    mfactory_2_3 = Dict{Any,mvaltype_2_3}();
-    mfactory_3_1 = Dict{Any,mvaltype_3_1}();
-    tfactory_2_1 = Dict{Any,tvaltype_2_1}();
-    tfactory_3_2 = Dict{Any,tvaltype_3_2}();
-    tfactory_2_2 = Dict{Any,tvaltype_2_2}();
-
-
-
-    #---- create factories
-    promise_creation = Dict{Any,Any}();
-
-    let 
-        
-        for (lmask,lblock,e,rblock,rmask) in opp.blocks
-            l_virt = space(ac,1);
-            l_o = opp.domspaces[lmask][1];
-            r_o = opp.imspaces[rmask][1];
-            r_virt = space(ac,3)';
-
-            homsp_2_1_2_1 = l_virt*l_o'←l_virt
-            key_2_1_2_1 = (homsp_2_1_2_1,(3,1),(2,));
-
-            if !(key_2_1_2_1 in keys(promise_creation))
-                promise_creation[key_2_1_2_1] = @Threads.spawn (tfactory_2_1,TransposeFact(homsp_2_1_2_1,storage,(3,1),(2,)))
-            end
-
-            key_2_3_2_3 = l_virt'*l_virt←space(e,3)'*space(e,4)'*space(e,2)';
-            key_2_3_3_2 = (key_2_3_2_3,(2,5,4),(1,3));
-            if !(key_2_3_3_2 in keys(promise_creation))
-                t_t = @Threads.spawn (mfactory_2_3,DelayedFact(key_2_3_2_3,storage))
-                promise_creation[key_2_3_2_3] = t_t
-                promise_creation[key_2_3_3_2] = @Threads.spawn (tfactory_3_2,TransposeFact(fetch(t_t)[2],(2,5,4),(1,3)))
-            end
-
-            p1 = opp.pspace;
-            v1 = l_virt;
-            v2 = r_virt;
-
-            homsp_mult = v1*p1*space(e,4) ← v2
-            if !(homsp_mult in keys(promise_creation))
-                t_tt = @Threads.spawn (mfactory_3_1,DelayedFact(homsp_mult,storage))
-                promise_creation[homsp_mult] = t_tt
-                promise_creation[(homsp_mult,(1,2),(4,3))] = @Threads.spawn (tfactory_2_2,TransposeFact(fetch(t_tt)[2],(1,2),(4,3)))
-            end
-
-        end
-
-        for (k,t) in promise_creation
-            (d,v) = fetch(t)
-            Base.setindex!(d,v,k);
-        end
-    end
-
-     
-    return (mfactory_2_3, mfactory_3_1, tfactory_2_1, tfactory_3_2, tfactory_2_2)
-
-end
-
 function MPSKit.∂∂AC(pos::Int,mps,ham::FusedMPOHamiltonian,cache)
     opp = ham[pos];
     le = leftenv(cache,pos,mps);
     re = rightenv(cache,pos,mps);
-
-
-
-    # tranpose factories:
-    #(mfactory_2_3, mfactory_3_1, tfactory_2_1, tfactory_3_2, tfactory_2_2) = _make_AC_factories(opp,mps.AC[pos]);
 
     process_blocks = Map() do (lmask,lblock,e,rblock,rmask)
         cl = le[lmask];
@@ -97,58 +22,25 @@ function MPSKit.∂∂AC(pos::Int,mps,ham::FusedMPOHamiltonian,cache)
             r = fast_axpy!(rblock[i],cr[i],r);
         end        
         
-        @planar tle[-1 -2 -3;-4 -5] := l[-1 1;-4]*e[1 -2;-5 -3]
-
-        #=
-        e_t = transpose(e,(1,),(3,4,2));
-
-        l_tf = tfactory_2_1[(codomain(l)←domain(l),(3,1),(2,))];
-        l_t = l_tf(l);
-
-        le_tf = mfactory_2_3[codomain(l_t)←domain(e_t)]
-
-        le_t = le_tf();
-        mul!(le_t,l_t,e_t);
-        free!(l_tf,l_t);
-
-        tle_f = tfactory_3_2[(codomain(le_t)←domain(le_t),(2,5,4),(1,3))];
-        tle = tle_f(le_t);
-        free!(le_tf,le_t);
-
-        temp_mul = mfactory_3_1[codomain(tle)←space(r,1)];
-        temp_trans = tfactory_2_2[(codomain(tle)←space(r,1),(1,2),(4,3))]
-
-
-        (tle,temp_mul,temp_trans,r)
-        =#
-
-        (tle,r)
+        (l,e,r)
     end
 
 
     blocks = tcollect(process_blocks,opp.blocks)
 
-    filter!(blocks) do (tle,r)
-        !(norm(tle)<1e-12 || norm(r)<1e-12)
+    filter!(blocks) do (l,e,r)
+        !(norm(l)<1e-12 || norm(r)<1e-12)
     end
     
     fused_∂∂AC(blocks)
 end
 
 function (h::fused_∂∂AC)(x)
-    @floop for (tle,r) in h.blocks
+    @floop for (l,e,r) in h.blocks
         @init t = similar(x)
+        
+        @planar allocator=malloc() t[-1 -2;-3] = l[-1 5; 4] * x[4 2; 1] * e[5 -2; 2 3] * r[1 3; -3]
 
-        @planar t[-1 -2;-3] = tle[-1 -2 3;1 2]*x[1 2;4]*r[4 3;-3]
-
-        #=
-        t1 = temp_mul();
-        mul!(t1,tle,x)
-        t2 = temp_trans(t1);
-        free!(temp_mul,t1);
-        mul!(t,t2,r);
-        free!(temp_trans,t2);
-        =#
         @reduce() do (toret = zero(x); t)
             fast_axpy!(true,t,toret);
             toret
@@ -166,130 +58,205 @@ MPSKit.expectation_value(st::FiniteMPS,th::FusedMPOHamiltonian,envs = environmen
 
 
 struct fused_∂∂AC2{A}
-    blocks::A
+    table::A
+    buffersize::Int
 end
 
-@tightloop_planar leftblock_ac2 allocator=malloc() out[-1 -2 -3;-4 -5] := l[-1 1;-4]*o[1 -2;-5 -3]
-@tightloop_planar rightblock_ac2 allocator=malloc() out[-1 -2 -3;-4 -5] := r[-1 1;-4]*o[-3 -5;-2 1]
-@tightloop_planar ac2_update allocator=malloc() out[-1 -2;-3 -4] += l[-1 -2 5;1 2]*ac2[1 2;3 4]*r[3 4 5;-3 -4]
+function rowr_colr_from_fusionblockstructure(structure::TensorKit.FusionBlockStructure{I,N,F₁,F₂}) where {I,N,F₁,F₂}
+    S = sectortype(F₁)
+    rowr = Dict{S,Dict{F₁,UnitRange{Int}}}()
+    colr = Dict{S,Dict{F₂,UnitRange{Int}}}()
+    N1 = length(F₁)
+    N2 = length(F₂)
+    for ((f1,f2),(sz,st,o)) in zip(structure.fusiontreelist,structure.fusiontreestructure)
+        (block_sz,block_range) = structure.blockstructure[f1.coupled]
+        block_range_start = block_range[1]
+        
+        #(subsz, substr, totaloffset)
+
+        # reshape back to codomain/domain:
+        i = mod(o+1-block_range_start,block_sz[1])+1
+        j = (o+1-block_range_start)÷block_sz[1]+1
+
+        irange = i:i+prod(sz[1:N1])-1
+        jrange = j:j+prod(sz[N1+1:N1+N2])-1
+
+        if !(f1.coupled in keys(rowr))
+            rowr[f1.coupled] = Dict{F₁,UnitRange{Int}}()
+            colr[f1.coupled] = Dict{F₁,UnitRange{Int}}()
+        end
+        if f1 in keys(rowr[f1.coupled])
+            @assert rowr[f1.coupled][f1] == irange
+        else
+            rowr[f1.coupled][f1] = irange
+        end
+
+        if f2 in keys(colr[f1.coupled])
+            @assert colr[f1.coupled][f2] == jrange
+        else
+            colr[f1.coupled][f2] = jrange
+        end
+    end
+
+    return (rowr,colr)
+end
+
+function _untrip_row(rowr::Dict{S,Dict{F₁,UnitRange{Int}}}) where {S,F₁}
+    out = Dict{S,Dict{S,UnitRange{Int}}}() #this will probably fail for multiple fusion, as innerlines aren't sectors
+    for (k,v) in rowr
+        if !(k in keys(out))
+            out[k] = Dict{S,UnitRange{Int}}()
+        end
+
+        for (f,range) in v
+            q = f.uncoupled[end]
+            if !(q in keys(out[k]))
+                out[k][q] = range
+            else
+                out[k][q] = min(range.start,out[k][q].start):max(range.stop,out[k][q].stop)
+            end
+        end
+    end
+    return out
+end
+
+
+function _untrip_col(colr::Dict{S,Dict{F₁,UnitRange{Int}}}) where {S,F₁}
+    out = Dict{S,Dict{Tuple{S,S,S},UnitRange{Int}}}() #this will probably fail for multiple fusion, as innerlines aren't sectors
+    for (k,v) in colr
+        if !(k in keys(out))
+            out[k] = Dict{Tuple{S,S,S},UnitRange{Int}}()
+        end
+
+        for (f,range) in v
+            q = (f.uncoupled[end],f.innerlines[end],f.uncoupled[end-1])
+            if !(q in keys(out[k]))
+                out[k][q] = range
+            else
+                out[k][q] = min(range.start,out[k][q].start):max(range.stop,out[k][q].stop)
+            end
+        end
+    end
+    return out
+end
+
+
+function _leftblock(opp1::FusedSparseBlock{E,O,Sp},le) where {E,O,Sp}
+   
+    blocked_left_blocks = map(opp1.blocks) do (lmask,lblock,e,rblock,rmask)
+        cl = le[lmask];
+        
+        l = rmul!(copy(cl[1]),lblock[1])
+        for i in 2:length(cl)
+            l = axpy!(lblock[i],cl[i],l);
+        end
+
+        @planar allocator=malloc cle[-1 -2;-3 -4 -5] := l[-1 1;-3]*e[1 -2;-4 -5]
+        
+        (rowr,colr) = rowr_colr_from_fusionblockstructure(TensorKit.fusionblockstructure(cle.space))
+        sparsified = Dict{Tuple{sectortype(l),sectortype(l),sectortype(l),sectortype(l),sectortype(l)},Matrix{eltype(l)}}()
+
+        untr_col = _untrip_col(colr)
+        untr_row = _untrip_row(rowr)
+
+        for (q2,b) in blocks(cle)
+            for (q1,rowrange) in untr_row[q2], ((q3,q4,q5),colrange) in untr_col[q2]
+                norm(b[rowrange,colrange],Inf) < 1e-12 && continue
+                
+                sparsified[(q1,q2,q3,q4,q5)] = copy(b[rowrange,colrange])
+            end
+        end
+
+        (sparsified,space(e,4),rblock,rmask)
+    end
+
+    
+    filter!(blocked_left_blocks) do (l,sp,rblock,rmask)
+        !isempty(l) && !isempty(rblock)
+    end
+    
+    return blocked_left_blocks
+end
+
+function _rightblock(opp2::FusedSparseBlock{E,O,Sp},re) where {E,O,Sp}
+
+  
+    blocked_right_blocks = map(opp2.blocks) do (lmask,lblock,e,rblock,rmask)
+        cr = re[rmask];
+
+        r = rmul!(copy(cr[1]),rblock[1])
+        for i in 2:length(rblock)
+            r = axpy!(rblock[i],cr[i],r)
+        end
+
+        @planar allocator=malloc cre[-1 -2 -3;-4 -5] := r[-1 1;-4]*e[-3 -5;-2 1]
+        
+        (rowr,colr) = rowr_colr_from_fusionblockstructure(TensorKit.fusionblockstructure(cre.space))
+        sparsified = Dict{Tuple{sectortype(r),sectortype(r),sectortype(r),sectortype(r),sectortype(r)},Matrix{eltype(r)}}()
+
+        untr_col = _untrip_row(colr)
+        untr_row = _untrip_col(rowr)
+
+        for (q2,b) in blocks(cre)
+            for (q1,colrange) in untr_col[q2], ((q3,q4,q6),rowrange) in untr_row[q2]
+                norm(b[rowrange,colrange],Inf) < 1e-12 && continue
+                
+                sparsified[(q6,q4,q3,q2,q1)] = copy(b[rowrange,colrange])
+            end
+        end
+
+        (lmask,lblock,space(e,1),sparsified)
+    end
+
+    
+    filter!(blocked_right_blocks) do (lmask,lblock,sp,r)
+        !isempty(lblock) && !isempty(r)
+    end
+    
+    return blocked_right_blocks
+end
 
 function MPSKit.∂∂AC2(pos::Int,mps,ham::FusedMPOHamiltonian{E,O,Sp},cache) where {E,O,Sp}
     opp1 = ham[pos];
     opp2 = ham[pos+1];
+
     le = leftenv(cache,pos,mps);
     re = rightenv(cache,pos+1,mps);
-
-    begin
-        
-        # tranpose factories:
-        S = spacetype(eltype(mps));
-        storage = storagetype(eltype(mps));
-
-        left_example = le[1]
-        right_example = re[1]
-        o_example_space = space(left_example,2)*opp1.pspace←opp1.pspace*space(left_example,2)
-        o_example_type = tensormaptype(S,2,2,storage)
-        leftblock_example = leftblock_ac2(l=(typeof(left_example),space(left_example)),o = (o_example_type,o_example_space))
-        rightblock_example = rightblock_ac2(r=(typeof(right_example),space(right_example)),o = (o_example_type,o_example_space))
-        leftblock_factories = Dict{typeof(o_example_space),typeof(leftblock_example)}()
-        rightblock_factories = Dict{typeof(o_example_space),typeof(rightblock_example)}()
-        promise_creation = Dict{typeof(o_example_space),Any}()
-        for (lmask,lblock,e,rblock,rmask) in opp1.blocks
-            space(e) in keys(promise_creation) && continue
-            promise_creation[space(e)] = @Threads.spawn begin
-                v_example = le[findfirst(lmask)]
-                leftblock_ac2(l=(typeof(v_example),space(v_example)),o = (typeof(e),space(e)))
-            end
-        end
-        for (k,v) in promise_creation
-            leftblock_factories[k] = fetch(v)
-        end
-
-        empty!(promise_creation)
-
-        promise_creation = Dict{typeof(o_example_space),Any}()
-        for (lmask,lblock,e,rblock,rmask) in opp2.blocks
-            space(e) in keys(promise_creation) && continue
-            promise_creation[space(e)] = @Threads.spawn begin
-                v_example = re[findfirst(rmask)]
-                rightblock_ac2(r=(typeof(v_example),space(v_example)),o = (typeof(e),space(e)))
-            end
-        end
-        for (k,v) in promise_creation
-            rightblock_factories[k] = fetch(v)
-        end
-    end
-
-    process_left_blocks = Map() do (lmask,lblock,e,rblock,rmask)
-        cl = le[lmask];
-        
-        l = rmul!(fast_copy(cl[1]),lblock[1])
-        for i in 2:length(cl)
-            l = fast_axpy!(lblock[i],cl[i],l);
-        end
-
-        tl = leftblock_factories[space(e)](l=l,o=e)
-        (tl,rblock,rmask)
-    end
-    
-    blocked_left_blocks = tcollect(process_left_blocks,opp1.blocks)
-
-    filter!(blocked_left_blocks) do (l,rblock,rmask)
-        norm(l)>1e-12 && !isempty(rblock)
-    end
-
-    process_right_blocks = Map() do (lmask,lblock,e,rblock,rmask)
-        cr = re[rmask];
-
-        r = rmul!(fast_copy(cr[1]),rblock[1])
-        for i in 2:length(rblock)
-            r = fast_axpy!(rblock[i],cr[i],r)
-        end
-
-        rl = rightblock_factories[space(e)](r=r,o=e)
-        
-        (lmask,lblock,rl)
-    end
-
-    blocked_right_blocks = tcollect(process_right_blocks,opp2.blocks)
-
-    filter!(blocked_right_blocks) do (lmask,lblock,r)
-        !isempty(lblock) && norm(r)>1e-12
-    end
-
-    left_group = Dict{typeof(opp1.pspace),Vector{Int}}();
-    right_group = Dict{typeof(opp1.pspace),Vector{Int}}();
-
-    for (i,(l,rblock,rmask)) in enumerate(blocked_left_blocks)
-        left_group[space(l,3)'] = [i;get(left_group,space(l,3)',Int[])]
-    end
-    
-    for (i,(lmask,lblock,r)) in enumerate(blocked_right_blocks)
-        right_group[space(r,3)] = [i;get(right_group,space(r,3),Int[])]
-    end
-
     p1 = opp1.pspace;
     p2 = opp2.pspace;
     v1 = left_virtualspace(mps,pos-1);
     v2 = right_virtualspace(mps,pos+1);
-    ac2_type = tensormaptype(S,2,2,storage)
     ac2_structure = v1*p1 ← v2*(p2)'
+    S = sectortype(ac2_structure)
 
+    ac2_blockstructure = TensorKit.fusionblockstructure(ac2_structure)
+    (rowr_ac2,colr_ac2) = rowr_colr_from_fusionblockstructure(ac2_blockstructure)
+    left_ac2_untrp = _untrip_row(rowr_ac2)
+    right_ac2_untrp = _untrip_row(colr_ac2)
+    
+    
+    blocked_left_blocks = _leftblock(opp1,le)
+    blocked_right_blocks = _rightblock(opp2,re)
+
+    left_group = Dict{typeof(opp1.pspace),Vector{Int}}();
+    right_group = Dict{typeof(opp1.pspace),Vector{Int}}();
+
+    for (i,(l,sp,rblock,rmask)) in enumerate(blocked_left_blocks)
+        left_group[sp'] = [i;get(left_group,sp',Int[])]
+    end
+    
+    for (i,(lmask,lblock,sp, r)) in enumerate(blocked_right_blocks)
+        right_group[sp] = [i;get(right_group,sp,Int[])]
+    end
     common_keys = collect(intersect(keys(left_group),keys(right_group)))
     d_matrices = Dict(map(k-> k=> fill(zero(E),length(left_group[k]),length(right_group[k])),common_keys))
-    splats = reduce(vcat,[
-        reduce(vcat,[
-            [(k,(il,lv),(ir,rv)) for (ir,rv) in enumerate(get(right_group,k,Int[]))] 
-            for (il,lv) in enumerate(v)]) 
-                for (k,v) in left_group])
 
-    @threads for (k,(il,lv),(ir,rv)) in splats
-        (l,rblock,rmask) = blocked_left_blocks[lv]
-        (lmask,lblock,r) = blocked_right_blocks[rv]
+    for (k,v) in left_group, (il,lv) in enumerate(v), (ir,rv) in enumerate(get(right_group,k,Int[]))
+        (l,e1,rblock,rmask) = blocked_left_blocks[lv]
+        (lmask,lblock,e2,r) = blocked_right_blocks[rv]
+
         d_matrices[k][il,ir] = sum(rblock[lmask[rmask]].*lblock[rmask[lmask]]);
     end
-
-    # this bit is single threaded but should take almost no time
     pairs = map(collect(keys(d_matrices))) do k
         d = d_matrices[k]
         
@@ -317,85 +284,125 @@ function MPSKit.∂∂AC2(pos::Int,mps,ham::FusedMPOHamiltonian{E,O,Sp},cache) w
 
         k => (U,V)
     end
-    filter!(pairs) do x
-        (k,(a,b)) = x
-        size(a,2) > 0
-    end
+
     kvs = Dict(pairs)
-
-
     totblock_inds = reduce(vcat,[[(k,i) for i in 1:size(kvs[k][1],2)] for k in keys(kvs)])
 
-    
-    mapper = Map() do (k,i)
+    #mapper = Map() do (k,i)
+
+    blocks = map(totblock_inds) do (k,i)
         (U,V) = kvs[k]
         cur_left_blocks = blocked_left_blocks[left_group[k]]
         cur_right_blocks = blocked_right_blocks[right_group[k]]
 
-        l = rmul!(fast_copy(cur_left_blocks[1][1]),U[1,i]);
-        for j in 2:size(U,1)
-            u = U[j,i];
-            if abs(u)>1e-12
-                fast_axpy!(u,cur_left_blocks[j][1],l)
+        l = empty(cur_left_blocks[1][1])
+        for j in 1:size(U,1)
+            scal = U[j,i]
+            abs(scal) < 1e-12 && continue
+
+            sparsified_left = cur_left_blocks[j][1]
+            for (k,b) in sparsified_left
+                if k in keys(l)
+                    axpy!(scal,b,l[k])
+                else
+                    l[k] = b*scal
+                end
             end
         end
-        
-        r = rmul!(fast_copy(cur_right_blocks[1][3]),V[i,1]);
-        for j in 2:size(V,2)
-            v = V[i,j];
-            if abs(v)>1e-12
-                fast_axpy!(v,cur_right_blocks[j][3],r)
+
+        r = empty(cur_right_blocks[1][4])
+        for j in 1:size(V,2)
+            scal = V[i,j]
+            abs(scal) < 1e-12 && continue
+
+            sparsified_right = cur_right_blocks[j][4]
+            for (k,b) in sparsified_right
+                if k in keys(r)
+                    axpy!(scal,b,r[k])
+                else
+                    r[k] = b*scal
+                end
             end
         end
-        
 
 
-        factory = ac2_update(l = (typeof(l),space(l)), r = (typeof(r),space(r)), ac2 = (ac2_type,ac2_structure), out = (ac2_type,ac2_structure))
+        table = Tuple{Tuple{Int,Int},Tuple{Int,Int},Int,Tuple{Int,Int},Tuple{Int,Int},Int,Matrix{eltype(O)},Matrix{eltype(O)}}[]
+        for ((q1,q2,q3,q4,q5),block_l) in l
+
+            for ((q6,_q4,_q3,_q2,q7),block_r) in r
+                _q4 == q4 && _q3 == q3 && _q2 == q2 || continue
+                
+                (d1_1,d2_1),br = ac2_blockstructure.blockstructure[q2]
+                sl1_1 = left_ac2_untrp[q2][q1]
+                sl1_2 = right_ac2_untrp[q2][q7]
+                offset_1 = (sl1_1.start-1)+(sl1_2.start-1)*d1_1+(br.start-1)
+
+                (d1_2,d2_2),br = ac2_blockstructure.blockstructure[q4]
+                sl2_1 = left_ac2_untrp[q4][q5]
+                sl2_2 = right_ac2_untrp[q4][q6]
+                offset_2 = (sl2_1.start-1)+(sl2_2.start-1)*d1_2+(br.start-1)
+
+                push!(table,((length(sl1_1),length(sl1_2)),(1,d1_1),offset_1,(length(sl2_1),length(sl2_2)),(1,d1_2),offset_2,block_l,block_r))
+				
+
+            end
+        end
+
         #fast_tmp_1 = fast_init(codomain(l),codomain(r),storagetype(l))
         #fast_submult = LeftSubMult(space(l),ac2_structure)
         
         # transpose + temps
         #(l,r,(fast_tmp_1,fast_submult))
-        (l,r,factory)
+        table
     end
 
-    blocks = tcollect(mapper,totblock_inds)
-    
-    fused_∂∂AC2(convert(Vector{typeof(blocks[1])},blocks))
-    
+    #blocks = tcollect(mapper,totblock_inds)
+    reduced_blocks = reduce(vcat,blocks)
+
+    buffersize = maximum(map(reduced_blocks) do (size_1,stride_1,offset_1,size_2,stride_2,offset_2,left,right)
+        max(size(left,1)*size_2[2],size_2[1]*size(right,2))
+    end)
+    fused_∂∂AC2(reduced_blocks,buffersize)
 end
 
-function _reduce_ac2(blocks,x,basesize)
-    if length(blocks) <= basesize
+#=
+BenchmarkTools.Trial: 43 samples with 1 evaluation.
+ Range (min … max):  1.344 s …   1.692 s  ┊ GC (min … max): 3.40% … 3.47%
+ Time  (median):     1.400 s              ┊ GC (median):    3.50%
+ Time  (mean ± σ):   1.426 s ± 78.635 ms  ┊ GC (mean ± σ):  3.42% ± 0.25%
+
+  ▃▃      █ ▁▁   ▁           ▁
+  ██▁▇▁▁▇▇█▇██▄▁▄█▁▄▁▁▄▁▁▁▁▁▄█▁▁▁▁▁▁▄▁▁▁▁▁▁▁▁▄▁▁▄▁▁▁▁▁▁▁▁▁▄ ▁
+  1.34 s         Histogram: frequency by time        1.69 s <
+
+ Memory estimate: 1.90 GiB, allocs estimate: 607160.
+ =#
+function _reduce_ac2(table,x,basesize,buffersize)
+    if length(table) <= basesize
         toret = zero(x)
 
-       
-               #=
+        cur_buffer = storagetype(x)(undef,buffersize)
 
-        for (l,r,(fast_tmp_1,fast_submult)) in blocks
-            tmp = fast_tmp_1(MallocBackend(),true)
-            rmul!(tmp,false)
-            fast_submult(tmp,l,x)
-            mul!(toret,tmp,r,true,true)
-            TensorOperations.tensorfree!(tmp, MallocBackend())
-        end
-  =#
-        for (l,r,factory) in blocks
-            factory(l=l,r=r,ac2=x,out=toret)
-        end
+        for (size_1,stride_1,offset_1,size_2,stride_2,offset_2,left,right) in table
+            v1 = StridedView(toret.data,size_1,stride_1,offset_1)
+            v2 = StridedView(x.data,size_2,stride_2,offset_2)
+            dst = StridedView(cur_buffer,(size(left,1),size(v2,2)),(1,size(left,1)))
 
+            mul!(dst,StridedView(left),v2)
+            mul!(v1,dst,StridedView(right),true,true)
+        end
 
         return toret
     else
 
-        spl = Int(ceil(length(blocks)/2));
-        t = @Threads.spawn _reduce_ac2(blocks[1:spl],x,basesize)
-        toret = _reduce_ac2(view(blocks,spl+1:length(blocks)),x,basesize)
+        spl = Int(ceil(length(table)/2));
+        t = @Threads.spawn _reduce_ac2(table[1:spl],x,basesize,buffersize)
+        toret = _reduce_ac2(view(table,spl+1:length(table)),x,basesize,buffersize)
         fast_axpy!(true,fetch(t),toret)
         return toret
     end
 end
 
 function (h::fused_∂∂AC2)(x)
-    _reduce_ac2(h.blocks,x,ceil(length(h.blocks)/nthreads()))
+    _reduce_ac2(h.table,x,ceil(length(h.table)/nthreads()),h.buffersize)
 end

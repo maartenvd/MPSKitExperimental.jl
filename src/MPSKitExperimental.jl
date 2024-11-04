@@ -20,6 +20,7 @@ module MPSKitExperimental
     leak_counter = Threads.Atomic{Int}(0)
 
     function TensorOperations.tensoralloc(::Type{Array{T,N}}, structure, istemp::Val, ::MallocBackend) where {T,N}
+        return tensoralloc(Array{T,N}, structure, istemp)
         if istemp == Val(true)
             atomic_add!(leak_counter,1)
             @assert isbitstype(T)
@@ -31,6 +32,7 @@ module MPSKitExperimental
     end
 
     function TensorOperations.tensorfree!(t::Array, ::MallocBackend)
+        return nothing
         atomic_add!(leak_counter,-1)
         Base.Libc.free(pointer(t))
         return nothing
