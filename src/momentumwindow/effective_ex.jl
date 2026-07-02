@@ -1,5 +1,5 @@
 #%% we also need the effective excitation hamiltonian for the leftgauged momentumwindow
-struct MWenv{A<:MPSTensor,B<:MPOTensor,C<:LeftGaugedMW,O<:MPOHamiltonian,D} <: Cache
+struct MWenv{A<:MPSTensor,B<:MPOTensor,C<:LeftGaugedMW,O<:MPOHamiltonian,D} 
     lefties::PeriodicArray{Vector{A},3}
     righties::PeriodicArray{Vector{A},3}
 
@@ -28,7 +28,7 @@ function MPSKit.environments(below::LeftGaugedMW,toapprox::Tuple{<:MPOHamiltonia
     # - support for different above/below
     (ham,above) = toapprox;
 
-    (above.left_gs === below.left_gs && above.right_gs === below.right_gs && utilleg(above) == utilleg(below) && above.momentum == below.momentum) || throw(ArgumentError("not supported (or sensical for that matter)"))
+    (above.left_gs === below.left_gs && above.right_gs === below.right_gs && auxiliaryspace(above) == auxiliaryspace(below) && above.momentum == below.momentum) || throw(ArgumentError("not supported (or sensical for that matter)"))
 
     K = above.momentum;
 
@@ -216,7 +216,7 @@ function MPSKit.rightenv(env::MWenv,row::Int,col::Int,below)
     return env.righties[row+col,:,col+1],env.rBEs[row+col,col+1],env.right_below[row+col,col+1]
 end
 
-function MPSKit.ac_proj(row::Int,col::Int,below::LeftGaugedMW,env::MWenv)
+function ac_proj(row::Int,col::Int,below::LeftGaugedMW,env::MWenv)
     ham = env.opp;
 
     (lefties,lBE,left_below) = leftenv(env,row,col,below);
@@ -251,7 +251,7 @@ function MPSKit.ac_proj(row::Int,col::Int,below::LeftGaugedMW,env::MWenv)
     return toret
 end
 
-function MPSKit.c_proj(row::Int,col::Int,below::LeftGaugedMW,env::MWenv)
+function c_proj(row::Int,col::Int,below::LeftGaugedMW,env::MWenv)
     ham = env.opp;
 
     (lefties,lBE,left_below) = leftenv(env,row,col+1,below);

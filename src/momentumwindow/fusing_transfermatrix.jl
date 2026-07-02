@@ -1,4 +1,4 @@
-struct FusingTransferMatrix{A<:AbstractTensorMap,B<:MPSKit.SparseMPOSlice,C<:AbstractTensorMap,D<:Union{Nothing,AbstractTensorMap}} <: MPSKit.AbstractTransferMatrix
+struct FusingTransferMatrix{A<:AbstractTensorMap,B<:MPSKit.MPOTensor,C<:AbstractTensorMap,D<:Union{Nothing,AbstractTensorMap}} <: MPSKit.AbstractTransferMatrix
     above::A
     middle::B
     below::C
@@ -47,15 +47,15 @@ fusing_transfer_right(v::MPSTensor, A::MPOTensor, Ab::MPOTensor,::Nothing) =
     @tensor t[-1 -2;-3] := A[-1 3;4 1]*v[1 -2;2]*conj(Ab[-3 3;4 2])
 
 
-fusing_transfer_left(vec::AbstractVector{V}, ham::MPSKit.SparseMPOSlice, A::O, Ab::O,::Nothing) where {V<:MPSTensor,O<:MPOTensor} = fusing_transfer_left(V,vec,ham,A,Ab,nothing)
-fusing_transfer_right(vec::AbstractVector{V}, ham::MPSKit.SparseMPOSlice, A::O, Ab::O,::Nothing) where {V<:MPSTensor,O<:MPOTensor} = fusing_transfer_right(V,vec,ham,A,Ab,nothing)
-fusing_transfer_left(vec::AbstractVector{O}, ham::MPSKit.SparseMPOSlice, A::O, Ab::V,::Nothing) where {V<:MPSTensor,O<:MPOTensor} = fusing_transfer_left(V,vec,ham,A,Ab,nothing)
-fusing_transfer_right(vec::AbstractVector{O}, ham::MPSKit.SparseMPOSlice, A::O, Ab::V,::Nothing) where {V<:MPSTensor,O<:MPOTensor} = fusing_transfer_right(V,vec,ham,A,Ab,nothing)
-fusing_transfer_left(vec::AbstractVector{O}, ham::MPSKit.SparseMPOSlice, A::V, Ab::O,::Nothing) where {V<:MPSTensor,O<:MPOTensor} = fusing_transfer_left(V,vec,ham,A,Ab,nothing)
-fusing_transfer_right(vec::AbstractVector{O}, ham::MPSKit.SparseMPOSlice, A::V, Ab::O,::Nothing) where {V<:MPSTensor,O<:MPOTensor} = fusing_transfer_right(V,vec,ham,A,Ab,nothing)
+fusing_transfer_left(vec::AbstractVector{V}, ham::MPSKit.MPOTensor, A::O, Ab::O,::Nothing) where {V<:MPSTensor,O<:MPOTensor} = fusing_transfer_left(V,vec,ham,A,Ab,nothing)
+fusing_transfer_right(vec::AbstractVector{V}, ham::MPSKit.MPOTensor, A::O, Ab::O,::Nothing) where {V<:MPSTensor,O<:MPOTensor} = fusing_transfer_right(V,vec,ham,A,Ab,nothing)
+fusing_transfer_left(vec::AbstractVector{O}, ham::MPSKit.MPOTensor, A::O, Ab::V,::Nothing) where {V<:MPSTensor,O<:MPOTensor} = fusing_transfer_left(V,vec,ham,A,Ab,nothing)
+fusing_transfer_right(vec::AbstractVector{O}, ham::MPSKit.MPOTensor, A::O, Ab::V,::Nothing) where {V<:MPSTensor,O<:MPOTensor} = fusing_transfer_right(V,vec,ham,A,Ab,nothing)
+fusing_transfer_left(vec::AbstractVector{O}, ham::MPSKit.MPOTensor, A::V, Ab::O,::Nothing) where {V<:MPSTensor,O<:MPOTensor} = fusing_transfer_left(V,vec,ham,A,Ab,nothing)
+fusing_transfer_right(vec::AbstractVector{O}, ham::MPSKit.MPOTensor, A::V, Ab::O,::Nothing) where {V<:MPSTensor,O<:MPOTensor} = fusing_transfer_right(V,vec,ham,A,Ab,nothing)
 
 
-function fusing_transfer_left(RetType,vec,ham::MPSKit.SparseMPOSlice,A,Ab,fuser)
+function fusing_transfer_left(RetType,vec,ham::MPSKit.MPOTensor,A,Ab,fuser)
     toret = similar(vec,RetType,length(vec));
 
     @threads for k in 1:length(vec)
@@ -81,7 +81,7 @@ function fusing_transfer_left(RetType,vec,ham::MPSKit.SparseMPOSlice,A,Ab,fuser)
 
     toret
 end
-function fusing_transfer_right(RetType,vec,ham::MPSKit.SparseMPOSlice,A,Ab,fuser)
+function fusing_transfer_right(RetType,vec,ham::MPSKit.MPOTensor,A,Ab,fuser)
     toret = similar(vec,RetType,length(vec));
 
     @threads for j in 1:length(vec)

@@ -9,7 +9,7 @@ function MPSKit.find_groundstate(st::LeftGaugedMW,h::MPOHamiltonian,alg::DMRG,en
                 st.AC[:,i] = x.vecs[:];
                 envs = environments(st,h,envs.le,envs.re);
                 res = map(1:size(st,1)) do row
-                    MPSKit.ac_proj(row,i,st,envs)
+                    ac_proj(row,i,st,envs)
                 end
                 RecursiveVec(res)
             end

@@ -1,4 +1,4 @@
-struct MPOMWenv{A<:MPSTensor,B1,B2,C<:LeftGaugedMW,O<:MPOHamiltonian,D} <: Cache
+struct MPOMWenv{A<:MPSTensor,B1,B2,C<:LeftGaugedMW,O<:MPOHamiltonian,D} 
     lefties::PeriodicArray{B1,3}
     righties::PeriodicArray{B1,3}
 
@@ -22,10 +22,10 @@ struct MPOMWenv{A<:MPSTensor,B1,B2,C<:LeftGaugedMW,O<:MPOHamiltonian,D} <: Cache
     re::D
 end
 
-MPSKit.environments(st::LeftGaugedMW,ham::Union{DenseMPO,SparseMPO},le = environments(st.left_gs,ham),re = environments(st.right_gs,ham);kwargs...) = environments(st,(ham,st),le,re;kwargs...)
-function MPSKit.environments(below::LeftGaugedMW,toapprox::Tuple{<:Union{DenseMPO,SparseMPO},<:LeftGaugedMW},le = environments(below.left_gs,first(toapprox)),re = environments(below.right_gs,first(toapprox)))
+MPSKit.environments(st::LeftGaugedMW,ham::MPSKit.MPOTensor,le = environments(st.left_gs,ham),re = environments(st.right_gs,ham);kwargs...) = environments(st,(ham,st),le,re;kwargs...)
+function MPSKit.environments(below::LeftGaugedMW,toapprox::Tuple{<:MPSKit.MPOTensor,<:LeftGaugedMW},le = environments(below.left_gs,first(toapprox)),re = environments(below.right_gs,first(toapprox)))
     (ham,above) = toapprox;
-    (above.left_gs === below.left_gs && above.right_gs === below.right_gs && utilleg(above) == utilleg(below) && above.momentum == below.momentum) || throw(ArgumentError("not supported (or sensical for that matter)"))
+    (above.left_gs === below.left_gs && above.right_gs === below.right_gs && auxiliaryspace(above) == auxiliaryspace(below) && above.momentum == below.momentum) || throw(ArgumentError("not supported (or sensical for that matter)"))
 
     K = above.momentum;
 
@@ -214,7 +214,7 @@ function MPSKit.rightenv(env::MWenv,row::Int,col::Int,below)
     return env.righties[row+col,:,col+1],env.rBEs[row+col,col+1],env.right_below[row+col,col+1]
 end
 
-function MPSKit.ac_proj(row::Int,col::Int,below::LeftGaugedMW,env::MWenv)
+function ac_proj(row::Int,col::Int,below::LeftGaugedMW,env::MWenv)
     ham = env.opp;
 
     (lefties,lBE,left_below) = leftenv(env,row,col,below);

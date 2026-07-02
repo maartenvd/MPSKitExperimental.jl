@@ -5,7 +5,7 @@ function MPSKit.timestep!(state::LeftGaugedMW, H, timestep::Number,alg::TDVP,env
             state.AC[:,i] = x.vecs[:];
             envs = environments(state,H,envs.le,envs.re);
             res = map(1:size(state,1)) do row
-                MPSKit.ac_proj(row,i,state,envs)
+                ac_proj(row,i,state,envs)
             end
             RecursiveVec(res)
         end
@@ -27,7 +27,7 @@ function MPSKit.timestep!(state::LeftGaugedMW, H, timestep::Number,alg::TDVP,env
         state.AC[:,i] = x.vecs[:];
         envs = environments(state,H,envs.le,envs.re);
         res = map(1:size(state,1)) do row
-            MPSKit.ac_proj(row,i,state,envs)
+            ac_proj(row,i,state,envs)
         end
         RecursiveVec(res)
     end
@@ -40,7 +40,7 @@ function MPSKit.timestep!(state::LeftGaugedMW, H, timestep::Number,alg::TDVP,env
             state.AC[:,i] = x.vecs[:];
             envs = environments(state,H,envs.le,envs.re);
             res = map(1:size(state,1)) do row
-                MPSKit.ac_proj(row,i,state,envs)
+                ac_proj(row,i,state,envs)
             end
             RecursiveVec(res)
         end
@@ -63,7 +63,7 @@ function MPSKit.timestep!(state::LeftGaugedMW, H, timestep::Number,alg::TDVP,env
         state.AC[:,i] = x.vecs[:];
         envs = environments(state,H,envs.le,envs.re);
         res = map(1:size(state,1)) do row
-            MPSKit.ac_proj(row,i,state,envs)
+            ac_proj(row,i,state,envs)
         end
         RecursiveVec(res)
     end

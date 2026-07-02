@@ -1,5 +1,5 @@
 #%% definition of leftgauged window with a momentum
-using MPSKit:MPSTensor,MPSBondTensor,MPOTensor,utilleg,_firstspace,_lastspace,_transpose_tail,_transpose_front,Multiline,LeftGaugedQP;
+using MPSKit:MPSTensor,MPSBondTensor,MPOTensor,_firstspace,_lastspace,_transpose_tail,_transpose_front,Multiline,LeftGaugedQP;
 
 #=
 Momentum superposition of different windows.
@@ -21,20 +21,20 @@ end
 Base.size(st::LeftGaugedMW) = size(st.variational);
 Base.size(st::LeftGaugedMW,i) = size(st)[i];
 Base.copy(st::LeftGaugedMW) = LeftGaugedMW(copy(st.VLs),copy(st.variational),st.momentum,st.left_gs,st.right_gs);
-MPSKit.utilleg(st::LeftGaugedMW) = space(st.VLs[1],3);
+MPSKit.auxiliaryspace(st::LeftGaugedMW) = space(st.VLs[1],3);
 
-function LeftGaugedMW(datfun, len::Int, maxvirtspace, left_gs::InfiniteMPS, right_gs::InfiniteMPS=left_gs; utilspace = oneunit(virtualspace(left_gs,1)), momentum = 0.0)
+function LeftGaugedMW(datfun, len::Int, maxvirtspace, left_gs::InfiniteMPS, right_gs::InfiniteMPS=left_gs; utilspace = oneunit(MPSKit.right_virtualspace(left_gs,1)), momentum = 0.0)
     length(left_gs) == length(right_gs) || throw(ArgumentError("period mismatch"));
 
     VLs = map(left_gs.AL) do al
-        vl = convert(TensorMap,adjoint(rightnull(adjoint(al))));
+        vl = convert(TensorMap,adjoint(right_null(adjoint(al))));
         utl = isomorphism(storagetype(vl),fuse(utilspace*space(vl,3)'),utilspace*space(vl,3)')
         @plansor VL[-1 -2;-3 -4] := vl[-1 -2;1]*conj(utl[-4;-3 1])
     end
 
     variational = Multiline(map(1:length(left_gs)) do row
-        physical_spaces = [space(left_gs,row+col) for col in 1:len];
-        FiniteMPS(datfun,scalartype(VLs[row]),physical_spaces,maxvirtspace,left=_lastspace(VLs[row])',right=virtualspace(right_gs,row+len))
+        physical_spaces = [physicalspace(left_gs,row+col) for col in 1:len];
+        FiniteMPS(datfun,scalartype(VLs[row]),physical_spaces,maxvirtspace,left=_lastspace(VLs[row])',right=MPSKit.right_virtualspace(right_gs,row+len))
     end)
 
     LeftGaugedMW(VLs,variational,momentum,left_gs,right_gs)
@@ -127,7 +127,7 @@ function partialdot(a::LeftGaugedMW,b::LeftGaugedMW)
     end)
 end
 
-function projdown(row,col,a,b,s=isomorphism(utilleg(b),utilleg(a)))
+function projdown(row,col,a,b,s=isomorphism(auxiliaryspace(b),auxiliaryspace(a)))
     if size(a,2) > size(b,2)
         b = extend(b,size(a,2)-size(b,2));
     elseif size(b,2) > size(a,2)
@@ -143,7 +143,7 @@ end
 function Base.convert(::Type{<:LeftGaugedMW},a::LeftGaugedQP)
     left_gs = a.left_gs;
     right_gs = a.right_gs;
-    utilspace = utilleg(a);
+    utilspace = auxiliaryspace(a);
 
     bundle = map(zip(a.VLs,a.Xs)) do (vl,x)
         utl = isomorphism(storagetype(vl),utilspace*space(vl,3)',fuse(utilspace*space(vl,3)'))

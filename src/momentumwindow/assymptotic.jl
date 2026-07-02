@@ -14,9 +14,9 @@ function Base.getproperty(st::AssymptoticScatter,s::Symbol)
     end
 end
 
-function MPSKit.utilleg(st::AssymptoticScatter)
-    u1 = utilleg(st.B1);
-    u2 = utilleg(st.B2);
+function MPSKit.auxiliaryspace(st::AssymptoticScatter)
+    u1 = MPSKit.auxiliaryspace(st.B1);
+    u2 = MPSKit.auxiliaryspace(st.B2);
     fuse(u1*u2)
 end
 
@@ -29,13 +29,13 @@ partialdot(scatter::AssymptoticScatter,init::LeftGaugedMW) = partialdot(init,sca
 function partialdot(init::LeftGaugedMW,scatter::AssymptoticScatter)
     (scatter.B1.left_gs == init.left_gs && scatter.B2.right_gs == init.right_gs) || throw(ArgumentError("I mean ...")) # nonsensical inputs
     scatter.momentum == init.momentum || throw(ArgumentError("momentum should match"))
-    #utilleg(scatter) == utilleg(init) || throw(ArgumentError("util leg space mismatch"))
+    #auxiliaryspace(scatter) == auxiliaryspace(init) || throw(ArgumentError("util leg space mismatch"))
 
-    fuser = isomorphism(utilleg(init),utilleg(scatter.B2)*utilleg(scatter.B1))
+    fuser = isomorphism(auxiliaryspace(init),auxiliaryspace(scatter.B2)*auxiliaryspace(scatter.B1))
     sum(map(1:size(init,1)) do row
         len = size(init,2);
         start = init.CR[row,len]'
-        A_start = TensorMap(zeros,_firstspace(start),utilleg(scatter.B2)'*_lastspace(start)');
+        A_start = TensorMap(zeros,_firstspace(start),auxiliaryspace(scatter.B2)'*_lastspace(start)');
         
         for i in size(init,2):-1:1
             A_start = TransferMatrix(scatter.B2.left_gs.AL[row+i],init.AL[row,i]) * A_start;
@@ -56,23 +56,32 @@ keeps track of the overlap
 implicitly we do H-E - not just H
 =#
 
-struct ScatterOverlap{A,B,D,E} <: Cache
+struct ScatterOverlap{A,B,D,E,F}# <: Cache
     ldependencies::Matrix{A} #the data we used to calculate leftenvs/rightenvs
     rdependencies::Matrix{A}
 
     opp::B #the operator
     E::Float64 # the energy of the scatterstate, which we have to subtract
 
-    leftenvs::Matrix{Vector{E}}
-    rightenvs::Matrix{Vector{A}}
+    leftenvs::Matrix{E}
+    rightenvs::Matrix{F}
 
-    Aleftenvs::Matrix{Vector{E}}
-    Brightenvs::Matrix{Vector{E}}
+    Aleftenvs::Matrix{E}
+    Brightenvs::Matrix{E}
 
-    ABleftenvs::Matrix{Vector{A}}
-    ABrightenvs::Matrix{Vector{E}}
+    ABleftenvs::Matrix{F}
+    ABrightenvs::Matrix{E}
 
     above::D
+end
+
+# I don't remember
+function energy_shift(H, gs, envs, len)
+    l = leftenv(envs,1,gs)
+    for i in 1:len-1
+        l = l * TransferMatrix(gs.AL[i], H[i], gs.AL[i])
+    end
+    return MPSKit.contract_mpo_expval(gs.AC[len], l , H[len], rightenv(envs,len,gs))
 end
 
 function MPSKit.environments(init::LeftGaugedMW,toapprox::Tuple{<:MPOHamiltonian,<:AssymptoticScatter})
@@ -85,9 +94,9 @@ function MPSKit.environments(init::LeftGaugedMW,toapprox::Tuple{<:MPOHamiltonian
     scatter.trivial || throw(ArgumentError("for now we only support trivial excitations")) # may get lifted
     (scatter.B1.left_gs == init.left_gs && init.trivial) || throw(ArgumentError("I mean ...")) # nonsensical inputs
     scatter.momentum == init.momentum || throw(ArgumentError("momentum should match"))
-    #utilleg(scatter) == utilleg(init) || throw(ArgumentError("util leg space mismatch"))
+    #auxiliaryspace(scatter) == auxiliaryspace(init) || throw(ArgumentError("util leg space mismatch"))
 
-    fuser = isomorphism(utilleg(init),utilleg(scatter.B2)*utilleg(scatter.B1));
+    fuser = isomorphism(MPSKit.auxiliaryspace(init),MPSKit.auxiliaryspace(scatter.B2)*MPSKit.auxiliaryspace(scatter.B1));
 
     K1 = scatter.B1.momentum;
     K2 = scatter.B2.momentum;
@@ -96,49 +105,43 @@ function MPSKit.environments(init::LeftGaugedMW,toapprox::Tuple{<:MPOHamiltonian
     Aenvs = environments(scatter.B1,ham,envs);
     Benvs = environments(scatter.B2,ham,envs);
     
-    lAB = left_double_env(K1+K2,scatter.B2,Aenvs.lBs,ham,fuser);
-    rAB = right_double_env(K1+K2,scatter.B1,Benvs.rBs,ham,fuser);
-
-    E = real(dot(scatter.B1,effective_excitation_hamiltonian(ham,scatter.B1,Aenvs)) + dot(scatter.B2,effective_excitation_hamiltonian(ham,scatter.B2,Benvs)));
-    E += real(expectation_value(left_gs,ham,size(init,2)+1));
-
-    O_type = eltype(ham[1]);
-    A_type = tensormaptype(spacetype(O_type),2,1,storagetype(O_type));
-    E_type = tensormaptype(spacetype(O_type),2,2,storagetype(O_type));
+    lAB = left_double_env(K1+K2,scatter.B2,Aenvs.leftBenvs,ham,fuser);
+    rAB = right_double_env(K1+K2,scatter.B1,Benvs.rightBenvs,ham,fuser);
+    
+    E = real(dot(scatter.B1,MPSKit.effective_excitation_hamiltonian(ham, scatter.B1, Aenvs)) + dot(scatter.B2,MPSKit.effective_excitation_hamiltonian(ham, scatter.B2, Benvs)))
+    
+    E += real(energy_shift(ham,left_gs,envs,size(init,2)))
+    #E += real(expectation_value(left_gs,ham,size(init,2))); appears to be gone?
+    
+    lEtype = eltype(lAB)
+    lAtype = typeof(rightenv(envs,1,left_gs))
 
     #fill in all fields
     ldependencies = fill(similar(init.AL[1,1]),size(init,1),size(init,2));
     rdependencies = fill(similar(init.AL[1,1]),size(init,1),size(init,2));
 
-    leftenvs = Matrix{Vector{E_type}}(undef,size(init,1),size(init,2)+1);
-    rightenvs = Matrix{Vector{A_type}}(undef,size(init,1),size(init,2)+1);
+    leftenvs = Matrix{lEtype}(undef,size(init,1),size(init,2)+1);
+    rightenvs = Matrix{lAtype}(undef,size(init,1),size(init,2)+1);
 
-    Aleftenvs = Matrix{Vector{E_type}}(undef,size(init,1),size(init,2)+1);
-    Brightenvs = Matrix{Vector{E_type}}(undef,size(init,1),size(init,2)+1);
+    Aleftenvs = Matrix{lEtype}(undef,size(init,1),size(init,2)+1);
+    Brightenvs = Matrix{lEtype}(undef,size(init,1),size(init,2)+1);
     
-    ABleftenvs = Matrix{Vector{A_type}}(undef,size(init,1),size(init,2)+1);
-    ABrightenvs = Matrix{Vector{E_type}}(undef,size(init,1),size(init,2)+1);
+    ABleftenvs = Matrix{lAtype}(undef,size(init,1),size(init,2)+1);
+    ABrightenvs = Matrix{lEtype}(undef,size(init,1),size(init,2)+1);
 
     for row in 1:size(init,1)
         leftenvs[row,1] = leftenv(envs,row,left_gs)*TransferMatrix(left_gs.AL[row],ham[row],init.VLs[row]);
         rightenvs[row,end] = rightenv(envs,row+size(init,2),left_gs);
         
-        Aleftenvs[row,1] =  map(1:ham.odim) do k
-            sum(map(1:ham.odim) do j
-                @plansor out[-1 -2;-3 -4]:= Aenvs.lBs[j,row][1 2;3 4]*conj(init.VLs[row][1 5;6 -1])*fuser[6;-3 3]*ham[row][j,k][2 5;7 -2]*middle_gs.AR[row][4 7;-4]
-                @plansor out[-1 -2;-3 -4]+= leftenv(envs,row,left_gs)[j][1 2;4]*conj(init.VLs[row][1 5;6 -1])*fuser[6;-3 3]*ham[row][j,k][2 5;7 -2]*scatter.B1[row][4 7;3 -4]
-            end)
-        end
+        @plansor Aleftenvs[row,1][-1 -2;-3 -4]:= Aenvs.leftBenvs[row][1 2;3 4]*conj(init.VLs[row][1 5;6 -1])*fuser[6;-3 3]*ham[row][2 5;7 -2]*middle_gs.AR[row][4 7;-4]
+        @plansor Aleftenvs[row,1][-1 -2;-3 -4]+= leftenv(envs,row,left_gs)[1 2;4]*conj(init.VLs[row][1 5;6 -1])*fuser[6;-3 3]*ham[row][2 5;7 -2]*scatter.B1[row][4 7;3 -4]
 
-        ABleftenvs[row,1] = map(1:ham.odim) do k
-            sum(map(1:ham.odim) do j
-                @plansor out[-1 -2;-3]:= lAB[j,row][1 2;3 4]*conj(init.VLs[row][1 5;3 -1])*ham[row][j,k][2 5;7 -2]*right_gs.AR[row][4 7;-3]
-                @plansor out[-1 -2;-3]+= Aenvs.lBs[j,row][1 2;3 4]*inv(middle_gs.CR[row-1])[4;5]*conj(init.VLs[row][1 6;7 -1])*fuser[7;8 3]*ham[row][j,k][2 6;9 -2]*scatter.B2[row][5 9;8 -3]
-            end)
-        end
 
-        Brightenvs[row,end] = (Benvs.rBs.*exp(1im*K2*size(init,2)))[:,row+size(init,2)]
-        ABrightenvs[row,end] = (rAB.*exp(1im*K*size(init,2)))[:,row+size(init,2)];
+        @plansor ABleftenvs[row,1][-1 -2;-3]:= lAB[row][1 2;3 4]*conj(init.VLs[row][1 5;3 -1])*ham[row][2 5;7 -2]*right_gs.AR[row][4 7;-3]
+        @plansor ABleftenvs[row,1][-1 -2;-3]+= Aenvs.leftBenvs[row][1 2;3 4]*inv(middle_gs.C[row-1])[4;5]*conj(init.VLs[row][1 6;7 -1])*fuser[7;8 3]*ham[row][2 6;9 -2]*scatter.B2[row][5 9;8 -3]
+
+        Brightenvs[row,end] = (Benvs.rightBenvs.*exp(1im*K2*size(init,2)))[row+size(init,2)]
+        ABrightenvs[row,end] = (rAB.*exp(1im*K*size(init,2)))[row+size(init,2)];
     
     end
 
@@ -156,7 +159,7 @@ function MPSKit.leftenv(env::ScatterOverlap,row::Int,col::Int,st::LeftGaugedMW)
     K1 = scatter.B1.momentum;
     K2 = scatter.B2.momentum;
 
-    fuser = isomorphism(utilleg(st),utilleg(scatter.B2)*utilleg(scatter.B1));
+    fuser = isomorphism(auxiliaryspace(st),auxiliaryspace(scatter.B2)*auxiliaryspace(scatter.B1));
 
     if !isnothing(a)
         #we need to recalculate
@@ -166,15 +169,12 @@ function MPSKit.leftenv(env::ScatterOverlap,row::Int,col::Int,st::LeftGaugedMW)
 
             #Aleftenv
             env.Aleftenvs[row,j+1] = env.Aleftenvs[row,j] * TransferMatrix(gs.AR[row+j],ham[row+j],st.AL[row,j])
-            for (k,l) in keys(ham[row+j])
-                @tensor  env.Aleftenvs[row,j+1][l][-1 -2;-3 -4] +=env.leftenvs[row,j][k][1 2;6 4]*conj(st.AL[row,j][1 5; -1])*fuser[6;-3 3]*ham[row+j][k,l][2 5;7 -2]*scatter.B1[row+j][4 7;3 -4]*exp(1im*K1*j)
-            end
+            @tensor  env.Aleftenvs[row,j+1][-1 -2;-3 -4] +=env.leftenvs[row,j][1 2;6 4]*conj(st.AL[row,j][1 5; -1])*fuser[6;-3 3]*ham[row+j][2 5;7 -2]*scatter.B1[row+j][4 7;3 -4]*exp(1im*K1*j)
+            
 
             #ABleftenv
             env.ABleftenvs[row,j+1] = env.ABleftenvs[row,j]*TransferMatrix(gs.AR[row+j],ham[row+j],st.AL[row,j])
-            for (k,l) in keys(ham[row+j-1])
-                @tensor  env.ABleftenvs[row,j+1][l][-1 -2;-3]+=  (env.Aleftenvs[row,j][k]*exp(1im*K2*j))[3 6;5 2]*inv(gs.CR[row+j-1])[2;4]*conj(st.AL[row,j][3 7;-1])*ham[row+j][k,l][6 7;1 -2]*scatter.B2[row+j][4 1;5 -3]
-            end
+            @tensor  env.ABleftenvs[row,j+1][-1 -2;-3]+=  (env.Aleftenvs[row,j]*exp(1im*K2*j))[3 6;5 2]*inv(gs.C[row+j-1])[2;4]*conj(st.AL[row,j][3 7;-1])*ham[row+j][6 7;1 -2]*scatter.B2[row+j][4 1;5 -3]
 
             env.ldependencies[row,j] = st.AL[row,j]
         end
@@ -194,7 +194,7 @@ function MPSKit.rightenv(env::ScatterOverlap,row::Int,col::Int,st::LeftGaugedMW)
     K1 = scatter.B1.momentum;
     K2 = scatter.B2.momentum;
 
-    fuser = isomorphism(utilleg(st),utilleg(scatter.B2)*utilleg(scatter.B1));
+    fuser = isomorphism(auxiliaryspace(st),auxiliaryspace(scatter.B2)*auxiliaryspace(scatter.B1));
 
     if !isnothing(a)
         a = size(st,2)-a+1;
@@ -207,9 +207,8 @@ function MPSKit.rightenv(env::ScatterOverlap,row::Int,col::Int,st::LeftGaugedMW)
 
             env.ABrightenvs[row,j] = TransferMatrix(gs.AL[row+j],ham[row+j],st.AR[row,j]) * env.ABrightenvs[row,j+1]
                 
-            for (k,l) in keys(ham[j])
-                @plansor  env.ABrightenvs[row,j][k][-1 -2;-3 -4] += scatter.B1[row+j][-1 2;4 1]*(fuser*exp(1im*K1*j))[-3;8 4]*inv(gs.CR[row+j])[1;3]*env.Brightenvs[row,j+1][l][3 5;8 7]*conj(st.AR[row,j][-4 6;7])*ham[row+j][k,l][-2 6;2 5]
-            end
+            @plansor  env.ABrightenvs[row,j][-1 -2;-3 -4] += scatter.B1[row+j][-1 2;4 1]*(fuser*exp(1im*K1*j))[-3;8 4]*inv(gs.C[row+j])[1;3]*env.Brightenvs[row,j+1][3 5;8 7]*conj(st.AR[row,j][-4 6;7])*ham[row+j][-2 6;2 5]
+            
 
             env.rdependencies[row,j] = st.AR[row,j]
         end
@@ -218,7 +217,7 @@ function MPSKit.rightenv(env::ScatterOverlap,row::Int,col::Int,st::LeftGaugedMW)
     return (env.rightenvs[row,col+1],env.Brightenvs[row,col+1],env.ABrightenvs[row,col+1]);
 end
 
-function MPSKit.ac_proj(row::Int,col::Int,st::LeftGaugedMW,env::ScatterOverlap)
+function ac_proj(row::Int,col::Int,st::LeftGaugedMW,env::ScatterOverlap)
     ham = env.opp;
     E = env.E;
     scatter = env.above;
@@ -231,32 +230,29 @@ function MPSKit.ac_proj(row::Int,col::Int,st::LeftGaugedMW,env::ScatterOverlap)
     (left,aleft,ableft) = leftenv(env,row,col,st);
     (right,bright,abright) = rightenv(env,row,col,st);
     
-    fuser = isomorphism(utilleg(st),utilleg(scatter.B2)*utilleg(scatter.B1));
+    fuser = isomorphism(auxiliaryspace(st),auxiliaryspace(scatter.B2)*auxiliaryspace(scatter.B1));
 
     #local total
     total = zero(st.AC[row,col]);
     pos = row+col;
-    
-    for (j,k) in keys(ham[pos])
-        
-        @tensor t[-1 -2;-3] := (aleft[j]*exp(1im*K2*col))[-1,7,5,6]*inv(gs.CR[pos-1])[6,1]*scatter.B2[pos][1,9,5,4]*right[k][4,8,-3]*ham[pos][j,k][7,-2,9,8];
-        @tensor t[-1 -2;-3] += (left[j]*exp(1im*K1*col))[-1,6,8,7]*fuser[8,3,9]*scatter.B1[pos][7,5,9,1]*inv(gs.CR[pos])[1,2]*bright[k][2,4,3,-3]*ham[pos][j,k][6,-2,5,4];
+            
+    @tensor t[-1 -2;-3] := (aleft*exp(1im*K2*col))[-1,7,5,6]*inv(gs.C[pos-1])[6,1]*scatter.B2[pos][1,9,5,4]*right[4,8,-3]*ham[pos][7,-2,9,8];
+    @tensor t[-1 -2;-3] += (left*exp(1im*K1*col))[-1,6,8,7]*fuser[8,3,9]*scatter.B1[pos][7,5,9,1]*inv(gs.C[pos])[1,2]*bright[2,4,3,-3]*ham[pos][6,-2,5,4];
 
-        @tensor t[-1 -2;-3] += aleft[j][-1,5,7,6]*gs.AR[pos][6,2,1]*inv(gs.CR[pos])[1,3]*bright[k][3,4,7,-3]*ham[pos][j,k][5,-2,2,4]
+    @tensor t[-1 -2;-3] += aleft[-1,5,7,6]*gs.AR[pos][6,2,1]*inv(gs.C[pos])[1,3]*bright[3,4,7,-3]*ham[pos][5,-2,2,4]
 
-        
-        
-        @tensor t[-1 -2;-3] += ableft[j][-1,2,3]*gs.AR[pos][3,1,4]*right[k][4,5,-3]*ham[pos][j,k][2,-2,1,5];
-        @tensor t[-1 -2;-3] += left[j][-1,5,4,2]*gs.AL[pos][2,6,3]*abright[k][3,1,4,-3]*ham[pos][j,k][5,-2,6,1];
-        
-        total += t;
-    end
     
-    @tensor total[-1 -2;-3] -= E*(exp(1im*K2*col)*aleft[1])[-1 7;5 6]*inv(gs.CR[pos-1])[6,1]*scatter.B2[pos][1,-2,5,4]*right[end][4,7,-3];
-    @tensor total[-1 -2;-3] -= (E*exp(1im*K1*col)*left[1])[-1,4,8,7]*fuser[8,3,9]*scatter.B1[pos][7,-2,9,1]*inv(gs.CR[pos])[1,2]*bright[end][2,4,3,-3];
+    
+    @tensor t[-1 -2;-3] += ableft[-1,2,3]*gs.AR[pos][3,1,4]*right[4,5,-3]*ham[pos][2,-2,1,5];
+    @tensor t[-1 -2;-3] += left[-1,5,4,2]*gs.AL[pos][2,6,3]*abright[3,1,4,-3]*ham[pos][5,-2,6,1];
+    
+    total += t;
+    
+    @tensor total[-1 -2;-3] -= E*(exp(1im*K2*col)*aleft[1])[-1 7;5 6]*inv(gs.C[pos-1])[6,1]*scatter.B2[pos][1,-2,5,4]*right[end][4,7,-3];
+    @tensor total[-1 -2;-3] -= (E*exp(1im*K1*col)*left[1])[-1,4,8,7]*fuser[8,3,9]*scatter.B1[pos][7,-2,9,1]*inv(gs.C[pos])[1,2]*bright[end][2,4,3,-3];
     @tensor total[-1 -2;-3] -= (E*ableft[1])[-1,2,3]*gs.AR[pos][3,-2,1]*right[end][1,2,-3];
     @tensor total[-1 -2;-3] -= (E*left[1])[-1,7,8,3]*gs.AL[pos][3,-2,6]*abright[end][6,7,8,-3];
-    @tensor total[-1 -2;-3] -= (E*aleft[1])[-1,4,7,6]*gs.AR[pos][6,-2,1]*inv(gs.CR[pos])[1,3]*bright[end][3,4,7,-3]
+    @tensor total[-1 -2;-3] -= (E*aleft[1])[-1,4,7,6]*gs.AR[pos][6,-2,1]*inv(gs.C[pos])[1,3]*bright[end][3,4,7,-3]
     
     total
 end
@@ -278,7 +274,7 @@ function MPSKit.approximate!(init::LeftGaugedMW, squash::Vector,alg::DMRG,envs =
 
         for row in 1:size(init,1),col in [1:size(init,2);(size(init,2)-1):-1:2]
             newac = sum(map(zip(squash,envs)) do (sq,pr)
-                MPSKit.ac_proj(row,col,init,pr)
+                ac_proj(row,col,init,pr)
             end)
 
             delta = max(delta,norm(newac-init.AC[row,col])/norm(newac))
@@ -286,7 +282,7 @@ function MPSKit.approximate!(init::LeftGaugedMW, squash::Vector,alg::DMRG,envs =
             init.AC[row,col] = newac
         end
 
-        alg.verbose && @info "dmrg iter $(iter) error $(delta)"
+        alg.verbosity>0 && @info "dmrg iter $(iter) error $(delta)"
         flush(stdout);
 
         iter += 1
@@ -299,61 +295,59 @@ end
 
 #%%
 function left_double_env(K,B2,lB1,ham,fuse_fun)
-    inv_C = inv.(B2.left_gs.CR);
-    @assert isempty(filter(x->MPSKit.isid(ham,x),2:ham.odim-1));
+    inv_C = inv.(B2.left_gs.C);
 
-    O_type = eltype(ham[1]);
-    lBs = PeriodicArray{O_type,2}(undef,ham.odim,length(B2));
+    odim = size(ham[1],1)
+    
+    @assert isempty(filter(x->MPSKit.isidentitylevel(ham,x),2:odim-1))
+
+
+    lBs = map(lB1) do lB
+        zeros(scalartype(lB),space(lB,1)*space(lB,2),_firstspace(fuse_fun)'*_lastspace(lB)')
+    end
 
     for pos in 1:length(B2)
-        # instantiate
-        for i in 1:ham.odim
-            lBs[i,pos+1] = TensorMap(zeros,scalartype(lB1[1,pos+1]),_firstspace(lB1[i,pos+1])*space(lB1[i,pos+1],2),_firstspace(fuse_fun)'*_lastspace(lB1[i,pos+1])');
-        end
-
-        for (i,j) in keys(ham[pos])
-            @tensor lBs[j,pos+1][-1 -2;-3 -4] += lB1[i,pos][7 6;3 1]*inv_C[pos-1][1;2]*B2[pos][2 5;4 -4]*conj(B2.left_gs.AL[pos][7 8;-1])*ham[pos][i,j][6 8;5 -2]*fuse_fun[-3;4 3]
-        end
+        @tensor lBs[pos+1][-1 -2;-3 -4] += lB1[pos][7 6;3 1]*inv_C[pos-1][1;2]*B2[pos][2 5;4 -4]*conj(B2.left_gs.AL[pos][7 8;-1])*ham[pos][6 8;5 -2]*fuse_fun[-3;4 3]
     end
-
+    
     lBs.*=exp(-1im*K);
+    
     for i in 2:length(B2)
-        lBs[:,i+1] += (lBs[:,i]*TransferMatrix(B2.right_gs.AR[i],ham[i],B2.right_gs.AL[i]))*exp(-1im*K);
+        lBs[i+1] += (lBs[i]*TransferMatrix(B2.right_gs.AR[i],ham[i],B2.right_gs.AL[i]))*exp(-1im*K);
     end
 
-    for pos in 1:length(B2),i in (1,ham.odim)
-        @plansor lBs[i,pos+1][-1 -2;-3 -4] -= lBs[i,pos+1][1 4;-3 2]*r_RL(B2.left_gs,pos)[2;3]*τ[3 4;5 1]*l_RL(B2.left_gs,pos+1)[-1;6]*τ[5 6;-4 -2]
+    # figure out how this works
+    for pos in 1:length(B2),i in (1,odim)
+        @plansor lBs[pos+1][i][-1 -2;-3 -4] -= lBs[pos+1][i][1 4;-3 2]*r_RL(B2.left_gs,pos)[2;3]*τ[3 4;5 1]*l_RL(B2.left_gs,pos+1)[-1;6]*τ[5 6;-4 -2]
     end
 
 
-    lBE = MPSKit.left_excitation_transfer_system(lBs[:,1],ham,B2;mom = K)
-
-    lBs[:,1] = lBE;
+    lBE = MPSKit.left_excitation_transfer_system(lBs[1],ham,B2;mom = K)
+    
+    lBs[1] = lBE;
     for i=1:length(B2)-1
-        lBE = (lBE*TransferMatrix(B2.right_gs.AR[i],ham[i],B2.right_gs.AL[i]))/exp(1im*K);
+        lBE = (lBE*TransferMatrix(B2.right_gs.AR[i],ham[i],B2.right_gs.AL[i]))*exp(-1im*K);
 
-        lBs[:,i+1] += lBE;
+        lBs[i+1] += lBE;
     end
 
     lBs
 end
 
 function right_double_env(K,B2,rB1,ham,fuse_fun)
-    inv_C = inv.(B2.right_gs.CR);
-    @assert isempty(filter(x->MPSKit.isid(ham,x),2:ham.odim-1));
+    inv_C = inv.(B2.right_gs.C);
+    odim = size(ham[1],1)
 
-    O_type = eltype(ham[1]);
-    rBs = PeriodicArray{O_type,2}(undef,ham.odim,length(B2));
+    @assert isempty(filter(x->MPSKit.isidentitylevel(ham,x),2:odim-1))
+
+
+    rBs = map(rB1) do rB
+        zeros(scalartype(rB),space(rB,1)*space(rB,2),_firstspace(fuse_fun)'*_lastspace(rB)')
+    end
+
     
     for pos in 1:length(inv_C) 
-        for i in 1:ham.odim
-            rBs[i,pos-1] = TensorMap(zeros,scalartype(rB1[1,pos-1]),_firstspace(rB1[i,pos-1])*space(rB1[i,pos-1],2),_firstspace(fuse_fun)'*_lastspace(rB1[i,pos-1])')
-        end
-
-
-        for (i,j) in keys(ham[pos])
-            @tensor rBs[i,pos-1][-1 -2;-3 -4] += B2[pos][-1 5;3 1]*inv_C[pos][1;2]*rB1[j,pos][2  6;4 8]*fuse_fun[-3;4 3]*ham[pos][i,j][-2 7;5 6]*conj(B2.left_gs.AR[pos][-4 7;8])
-        end
+        @tensor rBs[pos-1][-1 -2;-3 -4] += B2[pos][-1 5;3 1]*inv_C[pos][1;2]*rB1[pos][2  6;4 8]*fuse_fun[-3;4 3]*ham[pos][-2 7;5 6]*conj(B2.left_gs.AR[pos][-4 7;8])
     end
     
     rBs.*=exp(1im*K);
@@ -362,18 +356,18 @@ function right_double_env(K,B2,rB1,ham,fuse_fun)
         rBs[:,i-1] += TransferMatrix(B2.left_gs.AL[i],ham[i],B2.left_gs.AR[i])*(rBs[:,i]*exp(1im*K))
     end
 
-    for pos in 1:length(inv_C),i in (1,ham.odim)
-        @plansor rBs[i,pos-1][-1 -2;-3 -4] -= τ[6 4;1 3]*rBs[i,pos-1][1 3;-3 2]*l_LR(B2.left_gs,pos)[2;4]*r_LR(B2.left_gs,pos-1)[-1;5]*τ[-2 -4;5 6]
+    for pos in 1:length(inv_C),i in (1,odim)
+        @plansor rBs[pos-1][i][-1 -2;-3 -4] -= τ[6 4;1 3]*rBs[pos-1][i][1 3;-3 2]*l_LR(B2.left_gs,pos)[2;4]*r_LR(B2.left_gs,pos-1)[-1;5]*τ[-2 -4;5 6]
     end
     
 
-    rBE = MPSKit.right_excitation_transfer_system(rBs[:,end],ham,B2;mom = K)
+    rBE = MPSKit.right_excitation_transfer_system(rBs[end],ham,B2;mom = K)
 
-    rBs[:,end] = rBE;
+    rBs[end] = rBE;
 
     for i=length(B2):-1:2
         rBE = TransferMatrix(B2.left_gs.AL[i],ham[i],B2.right_gs.AR[i])*rBE*exp(1im*K);
-        rBs[:,i-1] += rBE
+        rBs[i-1] += rBE
     end
 
     rBs

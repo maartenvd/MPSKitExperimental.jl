@@ -29,10 +29,10 @@ MPSKit.transfer_right(v::MPSTensor, A::MPOTensor, Ab::MPOTensor) =
     @tensor t[-1 -2;-3] := A[-1 3;4 1]*v[1 -2;2]*conj(Ab[-3 3;4 2])
 
     #A is an excitation tensor; with an excitation leg
-MPSKit.transfer_left(vec::AbstractVector{V},ham::MPSKit.SparseMPOSlice,A::V,Ab::M=A) where V<:MPSTensor where M <:MPOTensor =
+MPSKit.transfer_left(vec::AbstractVector{V},ham::MPSKit.MPOTensor,A::V,Ab::M=A) where V<:MPSTensor where M <:MPOTensor =
 MPSKit.transfer_left(M,vec,ham,A,Ab)
-MPSKit.transfer_right(vec::AbstractVector{V},ham::MPSKit.SparseMPOSlice,A::V,Ab::M=A) where V<:MPSTensor where M <:MPOTensor =
+MPSKit.transfer_right(vec::AbstractVector{V},ham::MPSKit.MPOTensor,A::V,Ab::M=A) where V<:MPSTensor where M <:MPOTensor =
 MPSKit.transfer_right(M,vec,ham,A,Ab)
 
-MPSKit.transfer_left(vec::Vector{V}, ham::MPSKit.SparseMPOSlice, A::O, Ab::O) where {V<:MPSTensor,O<:MPOTensor} = MPSKit.transfer_left(V,vec,ham,A,Ab)
-MPSKit.transfer_right(vec::Vector{V}, ham::MPSKit.SparseMPOSlice, A::O, Ab::O) where {V<:MPSTensor,O<:MPOTensor} = MPSKit.transfer_right(V,vec,ham,A,Ab)
+MPSKit.transfer_left(vec::Vector{V}, ham::MPSKit.MPOTensor, A::O, Ab::O) where {V<:MPSTensor,O<:MPOTensor} = MPSKit.transfer_left(V,vec,ham,A,Ab)
+MPSKit.transfer_right(vec::Vector{V}, ham::MPSKit.MPOTensor, A::O, Ab::O) where {V<:MPSTensor,O<:MPOTensor} = MPSKit.transfer_right(V,vec,ham,A,Ab)
