@@ -5,8 +5,8 @@ function Base.getproperty(st::FiniteMultiline,s::Symbol)
         MPSKit.ALView(st);
     elseif s == :AR
         MPSKit.ARView(st);
-    elseif s == :CR
-        MPSKit.CRView(st);
+    elseif s == :C
+        MPSKit.CView(st);
     elseif s == :AC
         MPSKit.ACView(st);
     else

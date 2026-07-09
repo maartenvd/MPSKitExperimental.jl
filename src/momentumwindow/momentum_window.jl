@@ -21,7 +21,6 @@ end
 Base.size(st::LeftGaugedMW) = size(st.variational);
 Base.size(st::LeftGaugedMW,i) = size(st)[i];
 Base.copy(st::LeftGaugedMW) = LeftGaugedMW(copy(st.VLs),copy(st.variational),st.momentum,st.left_gs,st.right_gs);
-MPSKit.auxiliaryspace(st::LeftGaugedMW) = space(st.VLs[1],3);
 
 function LeftGaugedMW(datfun, len::Int, maxvirtspace, left_gs::InfiniteMPS, right_gs::InfiniteMPS=left_gs; utilspace = oneunit(MPSKit.right_virtualspace(left_gs,1)), momentum = 0.0)
     length(left_gs) == length(right_gs) || throw(ArgumentError("period mismatch"));
@@ -66,13 +65,17 @@ end
 function Base.getproperty(st::LeftGaugedMW,s::Symbol)
     if s == :trivial
         return st.left_gs === st.right_gs
-    elseif s in (:AL,:AR,:AC,:CR)
+    elseif s in (:AL,:AR,:AC,:C)
         return Base.getproperty(st.variational,s);
     else
         return getfield(st,s);
     end
 end
 
+MPSKit.istopological(qp::LeftGaugedMW) = qp.left_gs !== qp.right_gs
+MPSKit.istrivial(qp::LeftGaugedMW) = !MPSKit.istopological(qp) && isunit(MPSKit.auxiliarysector(qp))
+MPSKit.auxiliaryspace(st::LeftGaugedMW) = space(st.VLs[1],3);
+MPSKit.auxiliarysector(state::LeftGaugedMW) = only(sectors(auxiliaryspace(state)))
 function TensorKit.normalize!(st::LeftGaugedMW)
     normalize!.(st.variational.data)
     st
