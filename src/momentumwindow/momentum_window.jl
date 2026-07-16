@@ -163,3 +163,37 @@ function Base.convert(::Type{<:LeftGaugedMW},a::LeftGaugedQP)
 
     LeftGaugedMW(VLs,variational,a.momentum,left_gs,right_gs)
 end
+
+
+function MPSKit.variance(state::LeftGaugedMW, H::InfiniteMPOHamiltonian, envs = environments(state, H))
+    # I remember there being an issue here @gertian?
+    MPSKit.istopological(state) &&
+        throw(ArgumentError("variance of domain wall excitations is not implemented"))
+    gs = state.left_gs
+
+    e_local = map(1:length(gs)) do i
+        GL = leftenv(envs.le, i, gs)
+        GR = rightenv(envs.re, i, gs)
+        return MPSKit.contract_mpo_expval(gs.AC[i], GL, H[i][:, :, :, end], GR[end])
+    end
+    lattice = physicalspace(H)
+    H_regularized = H - InfiniteMPOHamiltonian(
+        lattice, i => e * id(storagetype(eltype(H)), lattice[i]) for (i, e) in enumerate(e_local)
+    )
+
+    # I don't remember where the formula came from
+    # TODO: this is probably broken
+    E_ex = dot(state.AC[1,1], MPSKitExperimental.ac_proj(1,1,state, envs))
+
+    rescaled_envs = environments(gs, H_regularized)
+    GL = leftenv(rescaled_envs, 1, gs)
+    GR = rightenv(rescaled_envs, 0, gs)
+    E_f = @plansor GL[5 3; 1] * gs.C[0][1; 4] * conj(gs.C[0][5; 2]) * GR[4 3; 2]
+
+    H2 = H_regularized^2
+    envs_2 = environments(state, H2)
+
+    return real(
+        dot(state.AC[1,1], MPSKitExperimental.ac_proj(1,1,state, envs_2)) - 2 * (E_f + E_ex) * E_ex + E_ex^2
+    )
+end
