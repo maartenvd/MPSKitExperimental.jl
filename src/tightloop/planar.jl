@@ -1,34 +1,20 @@
-# transpos 
+# transpos
 function generate_transpose_table(elt,sp_src,sp_dst, p1::IndexTuple{N₁},p2::IndexTuple{N₂}) where {N₁,N₂}
-    str_src = TensorKit.fusionblockstructure(sp_src)
-    str_dst = TensorKit.fusionblockstructure(sp_dst)
-
-
-    N = length(p1)+length(p2);
-    table = Tuple{elt,Tuple{NTuple{N,Int},NTuple{N,Int},Int},Tuple{NTuple{N,Int},NTuple{N,Int},Int}}[];
-    for (i,(f1,f2)) in enumerate(str_src.fusiontreelist)
-        cur_str_src = str_src.fusiontreestructure[i]
-        for ((f3,f4),coeff) in transpose(f1, f2, p1, p2)
-            cur_str_dst = str_dst.fusiontreestructure[str_dst.fusiontreeindices[(f3,f4)]]
-            #StridedView(t.data, sz, str, offset)
-            push!(table,(coeff,cur_str_src,cur_str_dst))
-        end
-    end
-    
-    (table,p1,p2)
+    transformer = TensorKit.treetransposer(sp_dst, sp_src, (p1,p2))
+    (transformer,p1,p2)
 end
 
-function execute_transpose_table!(t_dst,t_src,bulk,alpha=true,beta=false)
-    
-    (table,p1,p2) = bulk
-    rmul!(t_dst,beta);
+function execute_transpose_table!(t_dst,t_src,bulk::Tuple{TensorKit.TrivialTreeTransformer,Any,Any},alpha=true,beta=false,allocator=TensorOperations.DefaultAllocator())
+    (transformer,p1,p2) = bulk
+    TensorOperations.tensoradd!(t_dst[],t_src[],(p1,p2),false,alpha,beta,
+        TensorOperations.DefaultBackend(),allocator)
+    t_dst
+end
 
-    for (α, cur_str_src,cur_str_dst) in table
-        view_src = StridedView(t_src.data, cur_str_src...)
-        view_dst = StridedView(t_dst.data, cur_str_dst...)
-        axpy!(α*alpha,permutedims(view_src,(p1...,p2...)), view_dst)
-    end
-
+function execute_transpose_table!(t_dst,t_src,bulk,alpha=true,beta=false,allocator=TensorOperations.DefaultAllocator())
+    (transformer,p1,p2) = bulk
+    TensorKit.add_transform_kernel!(t_dst.data,t_src.data,(p1,p2),transformer,alpha,beta,
+        TensorOperations.DefaultBackend(),allocator,TensorKit.OhMyThreads.SerialScheduler())
     t_dst
 end
 
@@ -66,14 +52,14 @@ function mediated_planarcontract!(fst,mediator,C, A, pA::Index2Tuple, B, pB::Ind
         Ap = A
     else
         Ap = fast_init_A(fst.allocator,Val(true))
-        execute_transpose_table!(Ap,A,tbl_A)    
+        execute_transpose_table!(Ap,A,tbl_A,true,false,fst.allocator)    
     end
 
     if inplace_B
         Bp = B       
     else
         Bp = fast_init_B(fst.allocator,Val(true))
-        execute_transpose_table!(Bp,B,tbl_B)
+        execute_transpose_table!(Bp,B,tbl_B,true,false,fst.allocator)
     end
 
     mul!(C,Ap,Bp,α,β)
@@ -93,7 +79,7 @@ end
 
 function mediated_planaradd!(fst,mediator,C , A,pC, α, β , backend=nothing)
     (tbl_transpose,) = mediator
-    execute_transpose_table!(C,A,tbl_transpose,α,β)
+    execute_transpose_table!(C,A,tbl_transpose,α,β,fst.allocator)
    
     C
 end

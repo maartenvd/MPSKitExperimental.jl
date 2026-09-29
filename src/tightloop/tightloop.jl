@@ -6,7 +6,7 @@ struct fast_init{T, S, N₁, N₂, A}
         dom::ProductSpace{S,N₂},stortype) where {S<:IndexSpace,N₁,N₂}
 
         homspace = codom←dom
-        return new{eltype(stortype),S,N₁,N₂,stortype}(homspace,TensorKit.fusionblockstructure(homspace).totaldim)
+        return new{eltype(stortype),S,N₁,N₂,stortype}(homspace,TensorKit.degeneracystructure(homspace).totaldim)
     end
 
     function (d::fast_init{T, S, N₁, N₂, A})(alloc=TensorOperations.DefaultAllocator(),istemp=Val(false)) where {T,S, N₁, N₂, A<:DenseVector}
@@ -103,8 +103,14 @@ macro tightloop_tensor(name,args::Vararg{Expr})
     input_symbols =  TensorOperations.getinputtensorobjects(args[end])
     output_symbols =  TensorOperations.getoutputtensorobjects(args[end])
     
-    arg_symbols = [input_symbols...,output_symbols...];
+    arg_symbols = unique([input_symbols...,output_symbols...])
     kwarg_expr = Expr(:parameters,[Expr(:kw,s,nothing) for s in arg_symbols]...)
+    # the hot-loop call always provides every argument explicitly, so make these kwargs
+    # required (no default) there: an optional kwarg with a `nothing` default forces Julia's
+    # kwarg lowering to insert `isdefined`/fallback checks that widen an intermediate variable
+    # to a small `Union` type across all the arguments sharing that slot, which is needless
+    # overhead when the value is always supplied.
+    strict_kwarg_expr = Expr(:parameters,unique(arg_symbols)...)
     abstract_eval_call = Expr(:parameters,[Expr(:kw,s,Expr(:call,GlobalRef(MPSKitExperimental,:SymbolicTensorMap),Expr(:call,:getindex,s,1),Expr(:call,:getindex,s,2))) for s in arg_symbols]...)
 
     access_inner_fields = quote end
@@ -119,19 +125,22 @@ macro tightloop_tensor(name,args::Vararg{Expr})
         struct $(name){A,$(c_types...)}
             allocator::A
             $(declaration)
-            
+
             function $(name)($(kwarg_expr))
                 tup = abstract_eval($(abstract_eval_call))
                 new{typeof($(allocator)),typeof.(tup)...}($(allocator),tup...)
             end
-            
+
             function abstract_eval($(kwarg_expr))
                 $(a)
                 return tuple($(c...))
             end
-            function ($(instantiated_struct_name)::$name)($(kwarg_expr))
+            function ($(instantiated_struct_name)::$name)($(strict_kwarg_expr))
                 $(access_inner_fields)
-                $(b)
+                __tightloop_cp = TensorOperations.allocator_checkpoint!($(instantiated_struct_name).allocator)
+                __tightloop_result = $(b)
+                TensorOperations.allocator_reset!($(instantiated_struct_name).allocator, __tightloop_cp)
+                __tightloop_result
             end
         end
     end)
@@ -170,6 +179,9 @@ macro tightloop_planar(name,args::Vararg{Expr})
     output_symbols =  TensorOperations.getoutputtensorobjects(args[end])
     arg_symbols = unique([input_symbols...,output_symbols...])
     kwarg_expr = Expr(:parameters,[Expr(:kw,s,nothing) for s in arg_symbols]...)
+    # see @tightloop_tensor: required (no-default) kwargs for the hot-loop call avoid the
+    # isdefined/fallback lowering that widens an intermediate variable to a small Union type.
+    strict_kwarg_expr = Expr(:parameters,arg_symbols...)
     abstract_eval_call = Expr(:parameters,[Expr(:kw,s,Expr(:call,GlobalRef(MPSKitExperimental,:SymbolicTensorMap),Expr(:call,:getindex,s,1),Expr(:call,:getindex,s,2))) for s in arg_symbols]...)
 
     access_inner_fields = quote end
@@ -194,9 +206,12 @@ macro tightloop_planar(name,args::Vararg{Expr})
                 $(a)
                 return tuple($(c...))
             end
-            function ($(instantiated_struct_name)::$name)($(kwarg_expr))
+            function ($(instantiated_struct_name)::$name)($(strict_kwarg_expr))
                 $(access_inner_fields)
-                $(b)
+                __tightloop_cp = TensorOperations.allocator_checkpoint!($(instantiated_struct_name).allocator)
+                __tightloop_result = $(b)
+                TensorOperations.allocator_reset!($(instantiated_struct_name).allocator, __tightloop_cp)
+                __tightloop_result
             end
         end
     end)
