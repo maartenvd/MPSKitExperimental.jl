@@ -1,193 +1,124 @@
-# ac_prime
+# MPSKit removed the old ∂∂AC/∂∂C mechanism this package used to hijack, and replaced it
+# with a "Jordan-block" decomposition of the MPO effective Hamiltonian:
+# `MPSKit.AC_hamiltonian(site, below, operator::MPOHamiltonian, above, envs)` returns a
+# `JordanMPO_AC_Hamiltonian` whose six pieces (D onsite, I not-started, E finished,
+# C starting, B ending, A continuing) get summed on every call:
+#   y = A(x); y += x*D; y += E*x; y += x*I; y += x*C; y += B*x
+# Crucially, `prepare_operator!!` doesn't just prepare `A` — it also *folds* D into C or B,
+# and I into C, and E into B (via identity-tensor absorption), whenever the target exists.
+# For a typical bulk site this collapses 5 runtime terms down to just 2 (C and B). Skipping
+# that folding and tightloop-compiling all 5 raw terms separately would mean doing strictly
+# more contractions than MPSKit's own prepared path — not a fair comparison. So this file
+# replicates the folding step exactly, then tightloop-compiles whatever terms remain.
+# `A` (the "continuing" term) already delegates to MPSKit's own precomputed/prepared
+# derivative operator, which is itself a fused-and-cached fast path — there is nothing left
+# for tightloop to usefully accelerate there.
+#
+# Verdict (see examples/tighthack.ipynb): on par with MPSKit's own `AC_hamiltonian`, not faster.
+# An earlier ~1.7x gap was not the keyword-argument calling convention: MPSKit's @plansor uses
+# the non-planar @tensor path for Bosonic sectors (a single dense TensorOperations call for
+# Trivial sectors), whereas this used @tightloop_planar throughout. With the kernel chosen the
+# same way as @plansor, both run the same operations and only cache lookups are saved.
 
-struct Tight_AC_prime{T}
-    table::T
+struct TightJordanAC{TA,TD,TE,TI,TC,TB,FD,FE,FI,FC,FB} <: MPSKit.DerivativeOperator
+    A::TA
+    D::TD; fD::FD
+    E::TE; fE::FE
+    I::TI; fI::FI
+    C::TC; fC::FC
+    B::TB; fB::FB
 end
 
+function (H::TightJordanAC)(x)
+    y = ismissing(H.A) ? zerovector(x) : H.A(x)
+    ismissing(H.D) || H.fD(x=x, D=H.D, y=y)
+    ismissing(H.E) || H.fE(x=x, E=H.E, y=y)
+    ismissing(H.I) || H.fI(x=x, I=H.I, y=y)
+    ismissing(H.C) || H.fC(x=x, C=H.C, y=y)
+    ismissing(H.B) || H.fB(x=x, B=H.B, y=y)
+    return y
+end
 
+# mirrors MPSKit.JordanMPO_AC_Hamiltonian's own construction (algorithms/derivatives/hamiltonian_derivatives.jl),
+# since the ∂∂AC-hijack pattern this package used to rely on can't call "the original AC_hamiltonian"
+# from inside an active hijack without infinite recursion.
+function tight_AC_hamiltonian(site::Int, below, operator::MPSKit.MPOHamiltonian, above, envs; prepare::Bool=true)
+    @assert below === above "JordanMPO assumptions break"
+    GL = MPSKit.leftenv(envs, site, below)
+    GR = MPSKit.rightenv(envs, site, below)
+    W = operator[site]
 
-#@overlay tighthacktable function MPSKit.∂∂AC(pos::Int, mps, mpoham::Union{MPOHamiltonian,SparseMPO}, cache)
-function tighthack(::typeof(MPSKit.∂∂AC),pos::Int, mps, mpoham::Union{MPOHamiltonian,SparseMPO}, cache)
-    le = leftenv(cache,pos,mps)
-    re = rightenv(cache,pos,mps)
+    D = MPSKit.nonzero_length(W.D) > 0 ? only(W.D) : missing
 
-    ac_type = typeof(mps.AC[pos])
-    ac_structure = space(mps.AC[pos])
+    I = size(W, 4) == 1 ? missing : removeunit(GR[1], 2)
+    E = size(W, 1) == 1 ? missing : removeunit(GL[end], 2)
 
-    table = map(keys(mpoham[pos])) do (i,j)
-        @planar lblock[-1 -2 -3;-4 -5] := le[i][-1 1;-4]*mpoham[pos][i,j][1 -2;-5 -3]
-        rblock = re[j]
-        
-        contract = tight_ac_contractor(left=(typeof(lblock),space(lblock)),x = (ac_type,ac_structure), right = (typeof(rblock),space(rblock)), out = (ac_type,ac_structure))
-
-        (lblock,rblock,contract)
+    C = if MPSKit.nonzero_length(W.C) > 0
+        GR_2 = GR[2:(end - 1)]
+        @plansor starting[-1 -2; -3 -4] := W.C[-1; -3 1] * GR_2[-4 1; -2]
+        only(starting)
+    else
+        missing
     end
 
-    return Tight_AC_prime(table)
-end
+    B = if MPSKit.nonzero_length(W.B) > 0
+        GL_2 = GL[2:(end - 1)]
+        @plansor ending[-1 -2; -3 -4] := GL_2[-1 1; -3] * W.B[1 -2; -4]
+        only(ending)
+    else
+        missing
+    end
 
+    # empty at the edges of a finite chain, where it cannot be prepared
+    A = if MPSKit.nonzero_length(W.A) == 0
+        missing
+    else
+        Araw = MPSKit.MPO_AC_Hamiltonian(GL[2:(end - 1)], W.A, GR[2:(end - 1)])
+        prepare ? MPSKit.prepare_operator!!(Araw) : Araw
+    end
 
-(h::Tight_AC_prime)(x) = _reduce_tight_ac(h.table,x,ceil(length(h.table)/nthreads()))
-function _reduce_tight_ac(blocks,x,basesize)
-    if length(blocks) <= basesize
-        toret = zero(x)
-
-        for (l,r,factory) in blocks
-            factory(left=l,right=r,x=x,out=toret)
+    # mirror MPSKit's own prepare_operator!! folding, so we run exactly as many terms as it does
+    if prepare
+        if !ismissing(D)
+            if !ismissing(C)
+                Id = TensorKit.id(storagetype(C), space(C, 2))
+                @plansor C[-1 -2; -3 -4] += D[-1; -3] * Id[-2; -4]
+                D = missing
+            elseif !ismissing(B)
+                Id = TensorKit.id(storagetype(B), space(B, 1))
+                @plansor B[-1 -2; -3 -4] += Id[-1; -3] * D[-2; -4]
+                D = missing
+            end
         end
-
-        return toret
-    else
-        spl = Int(ceil(length(blocks)/2));
-        t = @Threads.spawn _reduce_tight_ac(blocks[1:spl],x,basesize)
-        toret = _reduce_tight_ac(view(blocks,spl+1:length(blocks)),x,basesize)
-        fast_axpy!(true,fetch(t),toret)
-        return toret
-    end
-end
-
-
-# c_prime
-#@overlay tighthacktable function MPSKit.∂∂C(pos::Int, mps, mpoham::Union{MPOHamiltonian,SparseMPO}, cache) 
-function tighthack(::typeof(MPSKit.∂∂C),pos::Int, mps, mpoham::Union{MPOHamiltonian,SparseMPO}, cache) 
-
-    le = leftenv(cache,pos+1,mps)
-    re = rightenv(cache,pos,mps)
-
-    c_type = typeof(mps.CR[pos])
-    c_structure = space(mps.CR[pos])
-
-    table = map(zip(le,re)) do (lblock,rblock)    
-        contract = tight_c_contractor(left=(typeof(lblock),space(lblock)),x = (c_type,c_structure), right = (typeof(rblock),space(rblock)), out = (c_type,c_structure))
-
-        (lblock,rblock,contract)
-    end
-
-    return Tight_AC_prime(table)
-end
-
-
-Base.:*(h::Union{Tight_AC_prime}, v) = h(v);
-
-#--------------------------------------------------------------------------------------
-
-# regularized transfermatrix with 3 special case contractions optimized - the case where we contract with a bond tensor and the case where we contract with a tensor with trivial charge (oneunit or oneunit')
-
-struct FastRegTransferMatrix{T,L,R,F1,F2,F3} <: MPSKit.AbstractTransferMatrix
-    tm::T
-    lvec::L
-    rvec::R
-    f1::F1
-    f2::F2
-    f3::F3
-end
-
-
-function (tm::FastRegTransferMatrix)(a)
-    out = tm.tm(a)
-    if a isa MPSBondTensor
-        tm.f1(v = out,lvec = tm.lvec, rvec = tm.rvec)
-    elseif a isa MPSTensor && space(a,2) == oneunit(space(a,1))
-        tm.f2(v = out,lvec = tm.lvec, rvec = tm.rvec)
-    elseif a isa MPSTensor && space(a,2) == oneunit(space(a,1))'
-        tm.f3(v = out,lvec = tm.lvec, rvec = tm.rvec)
-    else
-        MPSKit.regularize!(out,tm.lvec,tm.rvec)
-    end
-
-    return out
-end
-
-MPSKit.flip(a::FastRegTransferMatrix) = MPSKit.regularize(flip(a.tm),a.rvec,a.lvec)
-
-function tighthack(::typeof(MPSKit.regularize), t::MPSKit.AbstractTransferMatrix, lvec, rvec)
-    if lvec isa MPSBondTensor
-        # compile two special cases for this transfermatrix:
-        f1 = fast_reg_bond(v = (typeof(rvec),space(rvec)),lvec = (typeof(lvec),space(lvec)),rvec = (typeof(rvec),space(rvec)))
-        
-        l_mps_type = tensormaptype(spacetype(lvec),2,1,storagetype(lvec))
-        l_space = space(rvec,1)*oneunit(space(rvec,1))←space(rvec,2)'
-        f2 = fast_reg_mps(v = (l_mps_type,l_space),lvec = (typeof(lvec),space(lvec)),rvec = (typeof(rvec),space(rvec)))
-
-        l_space = space(rvec,1)*oneunit(space(rvec,1))'←space(rvec,2)'
-        f3 = fast_reg_mps(v = (l_mps_type,l_space),lvec = (typeof(lvec),space(lvec)),rvec = (typeof(rvec),space(rvec)))
-        return FastRegTransferMatrix(t,lvec,rvec,f1,f2,f3)
-    else
-        return MPSKit.RegTransferMatrix(t, lvec, rvec);
-    end
-end
-
-#--------------------------------------------------------------------------------------
-# regular MPS transfermatrix, again with 3 special case contractions optimized
-struct FastSingleTransferMatrix{A<:MPSTensor,C,F1L,F1R,F2L,F2R,F3L,F3R,B1,B2} <:
-    MPSKit.AbstractTransferMatrix
- above::A
- below::C
- isflipped::Bool
- 
- f1_left::F1L
- f1_right::F1R
-
- f2_left::F2L
- f2_right::F2R
- 
- f3_left::F3L
- f3_right::F3R
-
-    braid1::B1
-    braid2::B2
-end
-
-MPSKit.flip(d::FastSingleTransferMatrix) = FastSingleTransferMatrix(d.above,d.below,!d.isflipped,d.f1_left,d.f1_right,d.f2_left,d.f2_right,d.f3_left,d.f3_right,d.braid1,d.braid2)
-function (d::FastSingleTransferMatrix)(vec)
-    if vec isa MPSBondTensor && d.isflipped
-        return d.f1_left(v=vec,a=d.above,b=d.below)
-    elseif vec isa MPSBondTensor
-        return d.f1_right(v=vec,a=d.above,b=d.below)
-    elseif vec isa MPSTensor && d.isflipped
-        if space(vec,2) == oneunit(space(vec,2))
-            return d.f2_left(v = vec, a = d.above, b = d.below, braid = d.braid1)
-        elseif space(vec,2) == oneunit(space(vec,2))'
-            return d.f3_left(v = vec, a = d.above, b = d.below, braid = d.braid2)
-        else
-            return MPSKit.transfer_left(vec,d.above,copy(d.below'))
+        if !ismissing(I) && !ismissing(C)
+            Id = TensorKit.id(storagetype(C), space(C, 1))
+            @plansor C[-1 -2; -3 -4] += Id[-1; -3] * I[-4; -2]
+            I = missing
         end
-    elseif vec isa MPSTensor
-        if space(vec,2) == oneunit(space(vec,2))
-            return d.f2_right(v = vec, a = d.above, b = d.below, braid = d.braid2)
-        elseif space(vec,2) == oneunit(space(vec,2))'
-            return d.f3_right(v = vec, a = d.above, b = d.below, braid = d.braid1)
-        else
-            return MPSKit.transfer_right(vec,d.above,copy(d.below'))
+        if !ismissing(E) && !ismissing(B)
+            Id = TensorKit.id(storagetype(B), space(B, 2))
+            @plansor B[-1 -2; -3 -4] += E[-1; -3] * Id[-2; -4]
+            E = missing
         end
-    elseif d.isflipped
-        return MPSKit.transfer_left(vec,d.above,copy(d.below')) 
-    else
-        return MPSKit.transfer_right(vec,d.above,copy(d.below'))
     end
-end;
 
-function tighthack(::typeof(MPSKit.TransferMatrix),a::AbstractTensorMap, b, oc::AbstractTensorMap, isflipped=false)
-    if isnothing(b) && a isa MPSTensor
-        c = copy(oc') # my tighthack_planar code cannot deal with adjoint (how would I define the adjoint of a SymbolicTensorMap?)
-        bond_type = tensormaptype(spacetype(a),1,1,storagetype(a))
-        
-        f1_left = fast_left_bond(v = (bond_type,space(oc,1)←space(a,1)), a = (typeof(a),space(a)), b = (typeof(c),space(c)))
-        f1_right = fast_right_bond( a = (typeof(a),space(a)), b = (typeof(c),space(c)), v = (bond_type, space(a,3)'←space(oc,3)'))
+    x0 = below.AC[site]
+    xtd = (typeof(x0), space(x0))
 
-        triv_braid = copy(TensorKit.BraidingTensor(space(a, 2), dual(oneunit(space(a,2)))))
-        trivp_braid = copy(TensorKit.BraidingTensor(space(a, 2), oneunit(space(a,2))))
-
-
-        f2_left = fast_left_mps(v = (typeof(a),space(c,1)*oneunit(space(a,1))←space(a,1)),braid=(typeof(triv_braid),space(triv_braid)), a = (typeof(a),space(a)), b = (typeof(c),space(c)))
-        f2_right = fast_right_mps( a = (typeof(a),space(a)), b = (typeof(c),space(c)), v = (typeof(a), space(a,3)'*oneunit(space(a,1))←space(oc,3)'),braid=(typeof(trivp_braid),space(trivp_braid)))
-
-        f3_left = fast_left_mps(v = (typeof(a),space(c,1)*oneunit(space(a,1))'←space(a,1)),braid=(typeof(trivp_braid),space(trivp_braid)), a = (typeof(a),space(a)), b = (typeof(c),space(c)))
-        f3_right = fast_right_mps(a = (typeof(a),space(a)), b = (typeof(c),space(c)), v = (typeof(a), space(a,3)'*oneunit(space(a,1))'←space(oc,3)'),braid=(typeof(triv_braid),space(triv_braid)))
-        
-        return FastSingleTransferMatrix(a,c,isflipped,f1_left,f1_right,f2_left,f2_right,f3_left,f3_right,triv_braid,trivp_braid)
-
+    # same choice as @plansor: non-planar contractions for Bosonic sectors, planar otherwise
+    if BraidingStyle(sectortype(x0)) isa Bosonic
+        fD = ismissing(D) ? missing : tight_D_apply_tensor(x=xtd, D=(typeof(D),space(D)), y=xtd)
+        fE = ismissing(E) ? missing : tight_E_apply_tensor(x=xtd, E=(typeof(E),space(E)), y=xtd)
+        fI = ismissing(I) ? missing : tight_I_apply_tensor(x=xtd, I=(typeof(I),space(I)), y=xtd)
+        fC = ismissing(C) ? missing : tight_C_apply_tensor(x=xtd, C=(typeof(C),space(C)), y=xtd)
+        fB = ismissing(B) ? missing : tight_B_apply_tensor(x=xtd, B=(typeof(B),space(B)), y=xtd)
     else
-        return MPSKit.SingleTransferMatrix(a,b,oc,isflipped)
+        fD = ismissing(D) ? missing : tight_D_apply_planar(x=xtd, D=(typeof(D),space(D)), y=xtd)
+        fE = ismissing(E) ? missing : tight_E_apply_planar(x=xtd, E=(typeof(E),space(E)), y=xtd)
+        fI = ismissing(I) ? missing : tight_I_apply_planar(x=xtd, I=(typeof(I),space(I)), y=xtd)
+        fC = ismissing(C) ? missing : tight_C_apply_planar(x=xtd, C=(typeof(C),space(C)), y=xtd)
+        fB = ismissing(B) ? missing : tight_B_apply_planar(x=xtd, B=(typeof(B),space(B)), y=xtd)
     end
+
+    return TightJordanAC(A, D,fD, E,fE, I,fI, C,fC, B,fB)
 end

@@ -2,7 +2,8 @@ struct fused_∂∂AC{A}
     blocks::A
 end
 
-function MPSKit.∂∂AC(pos::Int,mps,ham::FusedMPOHamiltonian,cache)
+MPSKit.AC_hamiltonian(pos::Int,below,ham::FusedMPOHamiltonian,above,cache;kwargs...) = fused_AC_hamiltonian(pos,below,ham,cache)
+function fused_AC_hamiltonian(pos::Int,mps,ham::FusedMPOHamiltonian,cache)
     opp = ham[pos];
     le = leftenv(cache,pos,mps);
     re = rightenv(cache,pos,mps);
@@ -12,14 +13,14 @@ function MPSKit.∂∂AC(pos::Int,mps,ham::FusedMPOHamiltonian,cache)
         cr = re[rmask];
 
         
-        l = rmul!(fast_copy(cl[1]),lblock[1])
+        l = rmul!(copy(cl[1]),lblock[1])
         for i in 2:length(cl)
-            l = fast_axpy!(lblock[i],cl[i],l);
+            l = axpy!(lblock[i],cl[i],l);
         end
 
-        r = rmul!(fast_copy(cr[1]),rblock[1])
+        r = rmul!(copy(cr[1]),rblock[1])
         for i in 2:length(rblock)
-            r = fast_axpy!(rblock[i],cr[i],r);
+            r = axpy!(rblock[i],cr[i],r);
         end        
         
         (l,e,r)
@@ -42,7 +43,7 @@ function (h::fused_∂∂AC)(x)
         @planar allocator=malloc() t[-1 -2;-3] = l[-1 5; 4] * x[4 2; 1] * e[5 -2; 2 3] * r[1 3; -3]
 
         @reduce() do (toret = zero(x); t)
-            fast_axpy!(true,t,toret);
+            axpy!(true,t,toret);
             toret
         end
     end
@@ -54,22 +55,36 @@ Base.:*(a::fused_∂∂AC,v) = a(v)
 
 # ugly - inconsistent with MPOHamiltonian
 MPSKit.expectation_value(st::FiniteMPS,th::FusedMPOHamiltonian,envs = environments(st,th)) =
-    dot(st.AC[1],MPSKit.∂∂AC(1,st,th,envs)(st.AC[1]))/dot(st.AC[1],st.AC[1])
+    dot(st.AC[1],fused_AC_hamiltonian(1,st,th,envs)(st.AC[1]))/dot(st.AC[1],st.AC[1])
 
 
-struct fused_∂∂AC2{A}
+struct fused_∂∂AC2{A,W}
     table::A
     buffersize::Int
+    space::W # the table indexes raw data, so it is only valid for this space
 end
 
-function rowr_colr_from_fusionblockstructure(structure::TensorKit.FusionBlockStructure{I,N,F₁,F₂}) where {I,N,F₁,F₂}
-    S = sectortype(F₁)
+# coupled sector => ((d1,d2),range) of that block in the flat data vector of a tensor in W
+function blockstructure_dict(W::TensorKit.HomSpace)
+    ss = TensorKit.sectorstructure(W)
+    ds = TensorKit.degeneracystructure(W)
+    return Dict(zip(collect(ss.blocksectors),ds.blockstructure))
+end
+
+function rowr_colr_from_fusionblockstructure(W::TensorKit.HomSpace)
+    ss = TensorKit.sectorstructure(W)
+    ds = TensorKit.degeneracystructure(W)
+    blockstructure = blockstructure_dict(W)
+    trees = collect(ss.fusiontrees)
+    F₁ = typeof(first(trees)[1])
+    F₂ = typeof(first(trees)[2])
+    S = sectortype(W)
     rowr = Dict{S,Dict{F₁,UnitRange{Int}}}()
     colr = Dict{S,Dict{F₂,UnitRange{Int}}}()
-    N1 = length(F₁)
-    N2 = length(F₂)
-    for ((f1,f2),(sz,st,o)) in zip(structure.fusiontreelist,structure.fusiontreestructure)
-        (block_sz,block_range) = structure.blockstructure[f1.coupled]
+    N1 = numout(W)
+    N2 = numin(W)
+    for ((f1,f2),(sz,st,o)) in zip(trees,ds.subblockstructure)
+        (block_sz,block_range) = blockstructure[f1.coupled]
         block_range_start = block_range[1]
         
         #(subsz, substr, totaloffset)
@@ -83,7 +98,7 @@ function rowr_colr_from_fusionblockstructure(structure::TensorKit.FusionBlockStr
 
         if !(f1.coupled in keys(rowr))
             rowr[f1.coupled] = Dict{F₁,UnitRange{Int}}()
-            colr[f1.coupled] = Dict{F₁,UnitRange{Int}}()
+            colr[f1.coupled] = Dict{F₂,UnitRange{Int}}()
         end
         if f1 in keys(rowr[f1.coupled])
             @assert rowr[f1.coupled][f1] == irange
@@ -153,7 +168,7 @@ function _leftblock(opp1::FusedSparseBlock{E,O,Sp},le) where {E,O,Sp}
 
         @planar allocator=malloc cle[-1 -2;-3 -4 -5] := l[-1 1;-3]*e[1 -2;-4 -5]
         
-        (rowr,colr) = rowr_colr_from_fusionblockstructure(TensorKit.fusionblockstructure(cle.space))
+        (rowr,colr) = rowr_colr_from_fusionblockstructure(space(cle))
         sparsified = Dict{Tuple{sectortype(l),sectortype(l),sectortype(l),sectortype(l),sectortype(l)},Matrix{eltype(l)}}()
 
         untr_col = _untrip_col(colr)
@@ -191,7 +206,7 @@ function _rightblock(opp2::FusedSparseBlock{E,O,Sp},re) where {E,O,Sp}
 
         @planar allocator=malloc cre[-1 -2 -3;-4 -5] := r[-1 1;-4]*e[-3 -5;-2 1]
         
-        (rowr,colr) = rowr_colr_from_fusionblockstructure(TensorKit.fusionblockstructure(cre.space))
+        (rowr,colr) = rowr_colr_from_fusionblockstructure(space(cre))
         sparsified = Dict{Tuple{sectortype(r),sectortype(r),sectortype(r),sectortype(r),sectortype(r)},Matrix{eltype(r)}}()
 
         untr_col = _untrip_row(colr)
@@ -216,7 +231,8 @@ function _rightblock(opp2::FusedSparseBlock{E,O,Sp},re) where {E,O,Sp}
     return blocked_right_blocks
 end
 
-function MPSKit.∂∂AC2(pos::Int,mps,ham::FusedMPOHamiltonian{E,O,Sp},cache) where {E,O,Sp}
+MPSKit.AC2_hamiltonian(pos::Int,below,ham::FusedMPOHamiltonian,above,cache;kwargs...) = fused_AC2_hamiltonian(pos,below,ham,cache)
+function fused_AC2_hamiltonian(pos::Int,mps,ham::FusedMPOHamiltonian{E,O,Sp},cache) where {E,O,Sp}
     opp1 = ham[pos];
     opp2 = ham[pos+1];
 
@@ -224,13 +240,13 @@ function MPSKit.∂∂AC2(pos::Int,mps,ham::FusedMPOHamiltonian{E,O,Sp},cache) w
     re = rightenv(cache,pos+1,mps);
     p1 = opp1.pspace;
     p2 = opp2.pspace;
-    v1 = left_virtualspace(mps,pos-1);
+    v1 = left_virtualspace(mps,pos);
     v2 = right_virtualspace(mps,pos+1);
     ac2_structure = v1*p1 ← v2*(p2)'
     S = sectortype(ac2_structure)
 
-    ac2_blockstructure = TensorKit.fusionblockstructure(ac2_structure)
-    (rowr_ac2,colr_ac2) = rowr_colr_from_fusionblockstructure(ac2_blockstructure)
+    ac2_blockstructure = blockstructure_dict(ac2_structure)
+    (rowr_ac2,colr_ac2) = rowr_colr_from_fusionblockstructure(ac2_structure)
     left_ac2_untrp = _untrip_row(rowr_ac2)
     right_ac2_untrp = _untrip_row(colr_ac2)
     
@@ -332,12 +348,12 @@ function MPSKit.∂∂AC2(pos::Int,mps,ham::FusedMPOHamiltonian{E,O,Sp},cache) w
             for ((q6,_q4,_q3,_q2,q7),block_r) in r
                 _q4 == q4 && _q3 == q3 && _q2 == q2 || continue
                 
-                (d1_1,d2_1),br = ac2_blockstructure.blockstructure[q2]
+                (d1_1,d2_1),br = ac2_blockstructure[q2]
                 sl1_1 = left_ac2_untrp[q2][q1]
                 sl1_2 = right_ac2_untrp[q2][q7]
                 offset_1 = (sl1_1.start-1)+(sl1_2.start-1)*d1_1+(br.start-1)
 
-                (d1_2,d2_2),br = ac2_blockstructure.blockstructure[q4]
+                (d1_2,d2_2),br = ac2_blockstructure[q4]
                 sl2_1 = left_ac2_untrp[q4][q5]
                 sl2_2 = right_ac2_untrp[q4][q6]
                 offset_2 = (sl2_1.start-1)+(sl2_2.start-1)*d1_2+(br.start-1)
@@ -348,7 +364,7 @@ function MPSKit.∂∂AC2(pos::Int,mps,ham::FusedMPOHamiltonian{E,O,Sp},cache) w
             end
         end
 
-        #fast_tmp_1 = fast_init(codomain(l),codomain(r),storagetype(l))
+        #tmp_1 = fast_init(codomain(l),codomain(r),storagetype(l))
         #fast_submult = LeftSubMult(space(l),ac2_structure)
         
         # transpose + temps
@@ -362,26 +378,15 @@ function MPSKit.∂∂AC2(pos::Int,mps,ham::FusedMPOHamiltonian{E,O,Sp},cache) w
     buffersize = maximum(map(reduced_blocks) do (size_1,stride_1,offset_1,size_2,stride_2,offset_2,left,right)
         max(size(left,1)*size_2[2],size_2[1]*size(right,2))
     end)
-    fused_∂∂AC2(reduced_blocks,buffersize)
+    fused_∂∂AC2(reduced_blocks,buffersize,ac2_structure)
 end
 
-#=
-BenchmarkTools.Trial: 43 samples with 1 evaluation.
- Range (min … max):  1.344 s …   1.692 s  ┊ GC (min … max): 3.40% … 3.47%
- Time  (median):     1.400 s              ┊ GC (median):    3.50%
- Time  (mean ± σ):   1.426 s ± 78.635 ms  ┊ GC (mean ± σ):  3.42% ± 0.25%
 
-  ▃▃      █ ▁▁   ▁           ▁
-  ██▁▇▁▁▇▇█▇██▄▁▄█▁▄▁▁▄▁▁▁▁▁▄█▁▁▁▁▁▁▄▁▁▁▁▁▁▁▁▄▁▁▄▁▁▁▁▁▁▁▁▁▄ ▁
-  1.34 s         Histogram: frequency by time        1.69 s <
-
- Memory estimate: 1.90 GiB, allocs estimate: 607160.
- =#
 function _reduce_ac2(table,x,basesize,buffersize)
     if length(table) <= basesize
         toret = zero(x)
 
-        cur_buffer = storagetype(x)(undef,buffersize)
+        cur_buffer = tensoralloc(storagetype(x), buffersize, Val(true), malloc)
 
         for (size_1,stride_1,offset_1,size_2,stride_2,offset_2,left,right) in table
             v1 = StridedView(toret.data,size_1,stride_1,offset_1)
@@ -392,17 +397,22 @@ function _reduce_ac2(table,x,basesize,buffersize)
             mul!(v1,dst,StridedView(right),true,true)
         end
 
+        tensorfree!(cur_buffer, malloc)
+
         return toret
     else
 
         spl = Int(ceil(length(table)/2));
-        t = @Threads.spawn _reduce_ac2(table[1:spl],x,basesize,buffersize)
+        t = @Threads.spawn _reduce_ac2(view(table,1:spl),x,basesize,buffersize)
         toret = _reduce_ac2(view(table,spl+1:length(table)),x,basesize,buffersize)
-        fast_axpy!(true,fetch(t),toret)
+        axpy!(true,fetch(t),toret)
         return toret
     end
 end
 
 function (h::fused_∂∂AC2)(x)
+    space(x) == h.space || throw(SpaceMismatch("AC2 space $(space(x)) does not match $(h.space)"))
     _reduce_ac2(h.table,x,ceil(length(h.table)/nthreads()),h.buffersize)
 end
+
+Base.:*(a::fused_∂∂AC2,v) = a(v)

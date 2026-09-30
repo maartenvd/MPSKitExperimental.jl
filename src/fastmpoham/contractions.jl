@@ -1,14 +1,19 @@
-@tightloop_planar tight_ac_contractor out[-1 -2;-3] += left[-1 -2 4;1 2]*x[1 2;3]*right[3 4;-3]
+# tightloop-compiled kernels for the additive terms of MPSKit's JordanMPO_AC_Hamiltonian
+# apply step (see fastmpoham.jl and MPSKit.jl's algorithms/derivatives/hamiltonian_derivatives.jl):
+#   y = A(x); y += x*D; y += E*x; y += x*I; y += x*C; y += B*x
+# MPSKit writes these with @plansor, which uses the (non-planar) @tensor path for Bosonic
+# sectors and the @planar path otherwise, so both variants are compiled here and
+# tight_AC_hamiltonian picks one the same way.
+# allocator=malloc: thread safe (the factories are shared between all sites and threads,
+# a BufferAllocator created at macro expansion time would be shared as well) and free of GC.
+@tightloop_planar tight_D_apply_planar allocator=malloc y[-1 -2;-3] += x[-1 1;-3]*D[-2;1]
+@tightloop_planar tight_E_apply_planar allocator=malloc y[-1 -2;-3] += E[-1;1]*x[1 -2;-3]
+@tightloop_planar tight_I_apply_planar allocator=malloc y[-1 -2;-3] += x[-1 -2;1]*I[1;-3]
+@tightloop_planar tight_C_apply_planar allocator=malloc y[-1 -2;-3] += x[-1 2;1]*C[-2 -3;2 1]
+@tightloop_planar tight_B_apply_planar allocator=malloc y[-1 -2;-3] += B[-1 -2;1 2]*x[1 2;-3]
 
-@tightloop_planar tight_c_contractor out[-1;-2] += left[-1 2;1]*x[1;3]*right[3 2;-2]
-
-@tightloop_planar fast_reg_bond v[-1; -2] -= lvec[1; 2] * v[2; 1] * rvec[-1; -2]
-
-
-@tightloop_planar fast_reg_mps v[-1 -2; -3] -= lvec[1; 2] * v[2 -2; 1] * rvec[-1; -3]
-
-@tightloop_planar fast_left_bond y[-1;-2] := v[1;2]*a[2 3;-2]*b[-1;1 3]
-@tightloop_planar fast_right_bond y[-1;-2] := v[1;2]*a[-1 3;1]*b[2;-2 3]
-
-@tightloop_planar fast_left_mps y[-1 -2;-3] :=  v[1 2; 4] * a[4 5; -3] * braid[2 3; 5 -2] * b[-1;1 3]
-@tightloop_planar fast_right_mps y[-1 -2;-3] := a[-1 2; 1] * braid[-2 4; 2 3] * b[5;-3 4] * v[1 3; 5]
+@tightloop_tensor tight_D_apply_tensor allocator=malloc y[-1 -2;-3] += x[-1 1;-3]*D[-2;1]
+@tightloop_tensor tight_E_apply_tensor allocator=malloc y[-1 -2;-3] += E[-1;1]*x[1 -2;-3]
+@tightloop_tensor tight_I_apply_tensor allocator=malloc y[-1 -2;-3] += x[-1 -2;1]*I[1;-3]
+@tightloop_tensor tight_C_apply_tensor allocator=malloc y[-1 -2;-3] += x[-1 2;1]*C[-2 -3;2 1]
+@tightloop_tensor tight_B_apply_tensor allocator=malloc y[-1 -2;-3] += B[-1 -2;1 2]*x[1 2;-3]

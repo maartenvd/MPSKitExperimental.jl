@@ -1,22 +1,14 @@
-# transpos
+# transpose
 function generate_transpose_table(elt,sp_src,sp_dst, p1::IndexTuple{N₁},p2::IndexTuple{N₂}) where {N₁,N₂}
-    transformer = TensorKit.treetransposer(sp_dst, sp_src, (p1,p2))
-    (transformer,p1,p2)
+    p = (p1,p2)
+    plin = (TensorKit.linearize(p), ())
+    sectortype(sp_src) === Trivial && return (DensePermute(),plin)
+    transformer = TensorKit.treetransposer(sp_dst, sp_src, p, false)
+    (transformer,plin)
 end
 
-function execute_transpose_table!(t_dst,t_src,bulk::Tuple{TensorKit.TrivialTreeTransformer,Any,Any},alpha=true,beta=false,allocator=TensorOperations.DefaultAllocator())
-    (transformer,p1,p2) = bulk
-    TensorOperations.tensoradd!(t_dst[],t_src[],(p1,p2),false,alpha,beta,
-        TensorOperations.DefaultBackend(),allocator)
-    t_dst
-end
-
-function execute_transpose_table!(t_dst,t_src,bulk,alpha=true,beta=false,allocator=TensorOperations.DefaultAllocator())
-    (transformer,p1,p2) = bulk
-    TensorKit.add_transform_kernel!(t_dst.data,t_src.data,(p1,p2),transformer,alpha,beta,
-        TensorOperations.DefaultBackend(),allocator,TensorKit.OhMyThreads.SerialScheduler())
-    t_dst
-end
+execute_transpose_table!(t_dst,t_src,bulk,alpha=true,beta=false,allocator=TensorOperations.DefaultAllocator()) =
+    _execute_transform_table!(t_dst,t_src,bulk,alpha,beta,allocator)
 
 
 # tensorcontract
@@ -25,48 +17,58 @@ function create_mediated_planarcontract!(C::SymbolicTensorMap, A::SymbolicTensor
 
     codA, domA = codomainind(A), domainind(A)
     codB, domB = codomainind(B), domainind(B)
-    oindA, cindA = pA
-    cindB, oindB = pB
-    oindA, cindA, oindB, cindB = TensorKit.reorder_indices(codA, domA, codB, domB, oindA, cindA,
-                                                 oindB, cindB, pC...)
+    # like TensorKit.planarcontract!: rotate to cyclic partitions, C = transpose(A′*B′, pC′)
+    (oindA, cindA), (cindB, oindB), pC′ = TensorKit.planar_contract_indices(A.structure, pA, B.structure, pB, pC)
 
-    #A′ = permute(A, (oindA, cindA); copy=copyA)
+    #A′ = transpose(A, (oindA, cindA))
     sp_dst_A =  ProductSpace{S,length(oindA)}(map(n -> A.structure[n], oindA)) ← ProductSpace{S,length(cindA)}(map(n -> dual(A.structure[n]), cindA))
     fast_init_A = fast_init(codomain(sp_dst_A),domain(sp_dst_A),storagetype(ttype(A)))
     tbl_A = generate_transpose_table(scalartype(ttype(A)),A.structure,sp_dst_A,oindA,cindA)
     inplace_A = (oindA == codA && cindA == domA)
 
-    #B′ = permute(B, (cindB, oindB))
+    #B′ = transpose(B, (cindB, oindB))
     sp_dst_B =  ProductSpace{S,length(cindB)}(map(n -> B.structure[n], cindB)) ← ProductSpace{S,length(oindB)}(map(n -> dual(B.structure[n]), oindB))
     fast_init_B = fast_init(codomain(sp_dst_B),domain(sp_dst_B),storagetype(ttype(B)))
     tbl_B = generate_transpose_table(scalartype(ttype(B)),B.structure,sp_dst_B,cindB,oindB)
     inplace_B =  (cindB == codB && oindB == domB)
-    
-    (C,(fast_init_A,tbl_A,fast_init_B,tbl_B,inplace_A,inplace_B))
+
+    # a non-trivial pC′ requires an intermediate A′*B′
+    direct_C = TensorKit._isdirectoutput(pC′, length(oindA))
+    sp_AB = codomain(sp_dst_A) ← domain(sp_dst_B)
+    fast_init_AB = fast_init(codomain(sp_AB),domain(sp_AB),storagetype(ttype(C)))
+    tbl_C = direct_C ? nothing : generate_transpose_table(scalartype(ttype(C)),sp_AB,C.structure,pC′[1],pC′[2])
+
+    (C,(fast_init_A,tbl_A,fast_init_B,tbl_B,inplace_A,inplace_B,direct_C,fast_init_AB,tbl_C))
 end
 
 function mediated_planarcontract!(fst,mediator,C, A, pA::Index2Tuple, B, pB::Index2Tuple, pC::Index2Tuple, α=1, β=0 , backend=nothing)
-    (fast_init_A,tbl_A,fast_init_B,tbl_B,inplace_A,inplace_B) = mediator
+    (fast_init_A,tbl_A,fast_init_B,tbl_B,inplace_A,inplace_B,direct_C,fast_init_AB,tbl_C) = mediator
 
     if inplace_A
         Ap = A
     else
         Ap = fast_init_A(fst.allocator,Val(true))
-        execute_transpose_table!(Ap,A,tbl_A,true,false,fst.allocator)    
+        execute_transpose_table!(Ap,A,tbl_A,true,false,fst.allocator)
     end
 
     if inplace_B
-        Bp = B       
+        Bp = B
     else
         Bp = fast_init_B(fst.allocator,Val(true))
         execute_transpose_table!(Bp,B,tbl_B,true,false,fst.allocator)
     end
 
-    mul!(C,Ap,Bp,α,β)
+    if direct_C
+        mul!(C,Ap,Bp,α,β)
+    else
+        AB = mul!(fast_init_AB(fst.allocator,Val(true)),Ap,Bp)
+        execute_transpose_table!(C,AB,tbl_C,α,β,fst.allocator)
+        tensorfree!(AB, fst.allocator)
+    end
     !inplace_A && tensorfree!(Ap, fst.allocator)
     !inplace_B && tensorfree!(Bp, fst.allocator)
-   
-    C    
+
+    C
 end
 
 

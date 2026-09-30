@@ -2,25 +2,36 @@
 # non-`UniqueFusion` sectors, requires the same pack/matmul/unpack machinery TensorKit
 # now implements internally), we precompute TensorKit's own cached `TreeTransformer`
 # and reuse its (already optimal) application kernel at call time.
-function generate_permute_table(elt,sp_src,sp_dst, p1::IndexTuple{N₁},p2::IndexTuple{N₂}) where {N₁,N₂}
-    levels = (TensorKit.codomainind(sp_src), TensorKit.domainind(sp_src))
-    transformer = TensorKit.treebraider(sp_dst, sp_src, (p1,p2), levels)
-    (transformer,p1,p2)
-end
 
 # for `Trivial` sectortype (no symmetry, dense tensors) TensorKit skips fusion trees
 # entirely and works directly on the reshaped dense array
-function execute_permute_table!(t_dst,t_src,bulk::Tuple{TensorKit.TrivialTreeTransformer,Any,Any},alpha=true,beta=false,allocator=TensorOperations.DefaultAllocator())
-    (transformer,p1,p2) = bulk
-    TensorOperations.tensoradd!(t_dst[],t_src[],(p1,p2),false,alpha,beta,
+struct DensePermute end
+
+function generate_permute_table(elt,sp_src,sp_dst, p1::IndexTuple{N₁},p2::IndexTuple{N₂}) where {N₁,N₂}
+    p = (p1,p2)
+    plin = (TensorKit.linearize(p), ()) # only the linear permutation matters for the array kernels
+    sectortype(sp_src) === Trivial && return (DensePermute(),plin)
+    levels = (TensorKit.codomainind(sp_src)..., TensorKit.domainind(sp_src)...)
+    transformer = TensorKit.treebraider(sp_dst, sp_src, p, false, levels)
+    (transformer,plin)
+end
+
+execute_permute_table!(t_dst,t_src,bulk,alpha=true,beta=false,allocator=TensorOperations.DefaultAllocator()) =
+    _execute_transform_table!(t_dst,t_src,bulk,alpha,beta,allocator)
+
+function _execute_transform_table!(t_dst,t_src,bulk::Tuple{DensePermute,Any},alpha,beta,allocator)
+    (_,plin) = bulk
+    TensorOperations.tensoradd!(t_dst[],t_src[],plin,false,alpha,beta,
         TensorOperations.DefaultBackend(),allocator)
     t_dst
 end
 
-function execute_permute_table!(t_dst,t_src,bulk,alpha=true,beta=false,allocator=TensorOperations.DefaultAllocator())
-    (transformer,p1,p2) = bulk
-    TensorKit.add_transform_kernel!(t_dst.data,t_src.data,(p1,p2),transformer,alpha,beta,
-        TensorOperations.DefaultBackend(),allocator,TensorKit.OhMyThreads.SerialScheduler())
+function _execute_transform_table!(t_dst,t_src,bulk,alpha,beta,allocator)
+    (transformer,plin) = bulk
+    dst = TensorKit.StridedSubblocks(t_dst, transformer.structure_dst)
+    src = TensorKit.StridedSubblocks(t_src, transformer.structure_src)
+    TensorKit.add_transform_kernel!(dst,src,plin,false,transformer,alpha,beta,
+        TensorOperations.DefaultBackend(),allocator,1)
     t_dst
 end
 

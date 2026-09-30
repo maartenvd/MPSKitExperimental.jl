@@ -34,10 +34,10 @@ function fused_quantum_chemistry_hamiltonian(E0,K,V,Elt=eltype(V))
     block(bm,Irrep[U₁](1)⊠Irrep[SU₂](1//2)⊠FermionParity(1)) .*= -1;
 
     # this transposition is easier to reason about in a planar way
-    am = transpose(ap',(2,1),(3,));
-    bp = transpose(bm',(1,),(3,2));
-    ap = transpose(ap,(3,1),(2,));
-    bm = transpose(bm,(2,),(3,1));
+    am = transpose(ap',((2,1),(3,)));
+    bp = transpose(bm',((1,),(3,2)));
+    ap = transpose(ap,((3,1),(2,)));
+    bm = transpose(bm,((2,),(3,1)));
     
     flipcor = isometry(flip(space(bm,1)),space(bm,1));
     bm = flipcor*bm;
@@ -52,11 +52,11 @@ function fused_quantum_chemistry_hamiltonian(E0,K,V,Elt=eltype(V))
     block(h_pm,Irrep[U₁](2)⊠Irrep[SU₂](0)⊠ FermionParity(0)) .=2;
 
     @plansor o_derp[-1 -2;-3 -4] := am[-1 1;-3]*ap[1 -2;-4]
-    h_pm_derp = transpose(h_pm,(2,1),());
+    h_pm_derp = transpose(h_pm,((2,1),()));
     Lmap_apam_to_pm = find_right_map(o_derp,h_pm_derp)
 
     @plansor o_derp[-1 -2;-3 -4] := bm[-1;-3 1]*bp[-2;1 -4]
-    h_pm_derp2 = transpose(h_pm,(),(2,1));
+    h_pm_derp2 = transpose(h_pm,((),(2,1)));
     Rmap_bpbm_to_pm = find_left_map(o_derp,h_pm_derp2)
 
     h_ppmm = h_pm*h_pm-h_pm;
@@ -448,7 +448,7 @@ function fused_quantum_chemistry_hamiltonian(E0,K,V,Elt=eltype(V))
     @plansor LpRm[-1 -2;-3 -4] := ap[1 -2;-4]*bm[-1;-3 1]
     @plansor RpLm[-1 -2;-3 -4] := bp[-1;1 -2]*am[-3 1;-4]
     @plansor _pm_left[-1 -2;-3 -4] := (mp_f*Lmap_apam_to_pm)[-1]*h_pm[-2;-3]*conj(ut[-4])
-    @plansor _pm_right[-1 -2;-3 -4] := ut[-1]*h_pm[-2;-3]*(transpose(Rmap_bpbm_to_pm*pm_f',(1,),()))[-4]
+    @plansor _pm_right[-1 -2;-3 -4] := ut[-1]*h_pm[-2;-3]*(transpose(Rmap_bpbm_to_pm*pm_f',((1,),())))[-4]
 
     @plansor LRLm_1[-1 -2;-3 -4] := (mp_f_1)[-1;1 2]*bm[2;3 -2]*τ[1 3;-3 -4]
     @plansor LpLR_1[-1 -2;-3 -4] := (mp_f_1)[-1;1 2]*bp[1;-3 3]*τ[3 2;-4 -2]

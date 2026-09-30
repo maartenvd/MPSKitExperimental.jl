@@ -4,57 +4,72 @@ module MPSKitExperimental
     using Base.Threads, LinearAlgebra
 
     using JLD2
-    
-    _firstspace(t::AbstractTensorMap) = space(t, 1)
-    _lastspace(t::AbstractTensorMap) = space(t, numind(t))
-    fast_similar(t::TensorMap) = similar(t)
-    fast_copy(t::TensorMap) = copy(t)
-    fast_axpy!(a,x,y) = axpy!(a,x,y)
+    using MPSKit:MPSTensor,MPSBondTensor,MPOTensor,_firstspace,_lastspace,_transpose_tail,_transpose_front,Multiline,LeftGaugedQP;
+
+    #_firstspace(t::AbstractTensorMap) = space(t, 1)
+    #_lastspace(t::AbstractTensorMap) = space(t, numind(t))
+
+
     # stolen from unregistered https://github.com/lkdvos/AllocationKit.jl/blob/master/src/malloc.jl
     
-    struct MallocBackend <: TensorOperations.AbstractBackend end
-    const malloc = MallocBackend
+    # temporaries (istemp = Val(true)) are malloc'ed and must be released with tensorfree!;
+    # thread safe and needs no sizing, unlike TensorOperations.BufferAllocator.
+    # `malloc` is an instance, so it can be passed directly as `allocator=malloc`.
+    struct MallocBackend end
+    const malloc = MallocBackend()
+    (m::MallocBackend)() = m # `allocator = malloc()` also works
     export malloc
-    #const MallocBackend = TensorOperations.Backend{:malloc}
 
-    leak_counter = Threads.Atomic{Int}(0)
+    # number of malloc'ed temporaries that have not been freed yet
+    const leak_counter = Threads.Atomic{Int}(0)
 
-    function TensorOperations.tensoralloc(::Type{Array{T,N}}, structure, istemp::Val, ::MallocBackend) where {T,N}
-        return tensoralloc(Array{T,N}, structure, istemp)
-        if istemp == Val(true)
-            atomic_add!(leak_counter,1)
-            @assert isbitstype(T)
-            ptr = Base.Libc.malloc(prod(structure) * sizeof(T))
-            return unsafe_wrap(Array, convert(Ptr{T}, ptr), structure)
-        else
-            return tensoralloc(Array{T,N}, structure, istemp)
-        end
+    function _malloc_array(::Type{T}, structure) where {T}
+        isbitstype(T) || throw(ArgumentError("malloc allocator requires an isbits element type, got $T"))
+        ptr = Base.Libc.malloc(max(prod(structure), 1) * sizeof(T)) # malloc(0) may return NULL
+        ptr == C_NULL && throw(OutOfMemoryError())
+        return unsafe_wrap(Array, convert(Ptr{T}, ptr), structure)
+    end
+
+    TensorOperations.tensoralloc(::Type{Array{T,N}}, structure, ::Val{false}, ::MallocBackend) where {T,N} =
+        tensoralloc(Array{T,N}, structure, Val(false))
+    function TensorOperations.tensoralloc(::Type{Array{T,N}}, structure, ::Val{true}, ::MallocBackend) where {T,N}
+        A = _malloc_array(T, structure)
+        atomic_add!(leak_counter,1)
+        return A
     end
 
     function TensorOperations.tensorfree!(t::Array, ::MallocBackend)
-        return nothing
         atomic_add!(leak_counter,-1)
         Base.Libc.free(pointer(t))
         return nothing
     end
-
-    struct SafeMallocBackend <: TensorOperations.AbstractBackend end
-    #const SafeMallocBackend = TensorOperations.Backend{:safemalloc}
-
-    function TensorOperations.tensoralloc(::Type{Array{T,N}}, structure, istemp, ::SafeMallocBackend) where {T,N}
-        if istemp
-            @assert isbitstype(T)
-            ptr = Base.Libc.malloc(prod(structure) * sizeof(T))
-            A = unsafe_wrap(Array, convert(Ptr{T}, ptr), structure)
-            finalizer(Base.Fix2(TensorOperations.tensorfree!, MallocBackend()), A)
-        else
-            return tensoralloc(Array{T,N}, structure, istemp)
+    # TensorOperations frees the parent of a StridedView, which is the array's `Memory`
+    # rather than the `Array` itself
+    @static if isdefined(Core, :Memory)
+        # TensorKit's transform kernel allocates its recoupling buffers as `Memory`; without
+        # this method TensorOperations falls back to GC memory, which tensorfree! would then free
+        TensorOperations.tensoralloc(::Type{Memory{T}}, structure, ::Val{false}, ::MallocBackend) where {T} =
+            tensoralloc(Memory{T}, structure, Val(false))
+        function TensorOperations.tensoralloc(::Type{Memory{T}}, structure, ::Val{true}, ::MallocBackend) where {T}
+            A = _malloc_array(T, prod(structure))
+            atomic_add!(leak_counter,1)
+            return unsafe_wrap(Memory{T}, pointer(A), length(A))
+        end
+        function TensorOperations.tensorfree!(t::Memory, ::MallocBackend)
+            atomic_add!(leak_counter,-1)
+            Base.Libc.free(pointer(t))
+            return nothing
         end
     end
 
-    function TensorOperations.tensorfree!(t::Array, ::SafeMallocBackend)
-        finalize(t)
-        return nothing
+    # malloc'ed temporaries owned by julia: released by the GC, never by tensorfree!
+    struct SafeMallocBackend end
+
+    TensorOperations.tensoralloc(::Type{Array{T,N}}, structure, ::Val{false}, ::SafeMallocBackend) where {T,N} =
+        tensoralloc(Array{T,N}, structure, Val(false))
+    function TensorOperations.tensoralloc(::Type{Array{T,N}}, structure, ::Val{true}, ::SafeMallocBackend) where {T,N}
+        A = _malloc_array(T, structure)
+        return unsafe_wrap(Array, pointer(A), structure; own = true)
     end
     using MPSKit:TransferMatrix,auxiliaryspace
     export LeftGaugedMW, AssymptoticScatter,extend,partialdot,s_proj,projdown
@@ -69,13 +84,13 @@ module MPSKitExperimental
     include("momentumwindow/find_groundstate.jl")
 
     export @tightloop_tensor,@tightloop_planar
-    #include("tightloop/symbolic.jl")
-    #include("tightloop/tightloop.jl")
-    #include("tightloop/tensoroperations.jl")
-    #include("tightloop/planar.jl")
+    include("tightloop/symbolic.jl")
+    include("tightloop/tightloop.jl")
+    include("tightloop/tensoroperations.jl")
+    include("tightloop/planar.jl")
     
     export parse_fcidump, fused_quantum_chemistry_hamiltonian, disk_environments
-    using MPSKit:fill_data!
+    using MPSKit:fill_data!, add_util_leg, l_LL, r_RR
     # contains most of the "tricks" needed to avoid tensorkit bottlenecks. 
     # You can play with these files to make them fall back to the default tensorkit implementation
     #include("quantumchemistry/delayed_factory.jl");
@@ -84,20 +99,20 @@ module MPSKitExperimental
     
     # fused_mpoham is a new type of mpohamiltonian, that allows for a "blocking" step
     # I also needed environments - derivatives for this new mpohamiltonian
-    #include("quantumchemistry/fused_mpoham.jl");
-    #include("quantumchemistry/fused_env.jl");
-    #include("quantumchemistry/fused_deriv.jl");
+    include("quantumchemistry/fused_mpoham.jl");
+    include("quantumchemistry/fused_env.jl");
+    include("quantumchemistry/fused_deriv.jl");
 
     # implements the qchem hamiltonian as a fused_mpoham
-    #include("quantumchemistry/qchem_operator.jl");
-    #include("quantumchemistry/compress.jl"); # minimal compressing step, which removes a bunch of exact zeros, by making the mpoham-bond dimension site dependent
+    include("quantumchemistry/qchem_operator.jl");
+    include("quantumchemistry/compress.jl"); # minimal compressing step, which removes a bunch of exact zeros, by making the mpoham-bond dimension site dependent
     
-    #include("quantumchemistry/fcidump_parser.jl"); # simple parser for fcidump files
+    include("quantumchemistry/fcidump_parser.jl"); # simple parser for fcidump files
 
     # diskmanager uses a memory mapped file to store/transfer objects to. This automatically gives async IO
     #include("quantumchemistry/diskmanager.jl")
     #include("quantumchemistry/disk_backed_envs.jl")
-    #include("quantumchemistry/disk_backed_envs_manual.jl") # alternative to the diskmanager is to manually write data to disk
+    include("quantumchemistry/disk_backed_envs_manual.jl") # alternative to the diskmanager is to manually write data to disk
     
     #using MPSKit:GrassmannMPS
     #using GaussianBasis
@@ -105,7 +120,8 @@ module MPSKitExperimental
     #include("quantumchemistry/grassmann_scf.jl")
     #include("quantumchemistry/orbopt.jl")
     
-    #include("fastmpoham/fastmpoham.jl")
-    #include("fastmpoham/contractions.jl")
+    export tight_AC_hamiltonian
+    include("fastmpoham/contractions.jl")
+    include("fastmpoham/fastmpoham.jl")
 
 end
