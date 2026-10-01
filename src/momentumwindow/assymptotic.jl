@@ -31,11 +31,12 @@ function partialdot(init::LeftGaugedMW,scatter::AssymptoticScatter)
     scatter.momentum == init.momentum || throw(ArgumentError("momentum should match"))
     #auxiliaryspace(scatter) == auxiliaryspace(init) || throw(ArgumentError("util leg space mismatch"))
 
-    fuser = isomorphism(auxiliaryspace(init),auxiliaryspace(scatter.B2)*auxiliaryspace(scatter.B1))
+    # TODO ugly 'fix'
+    fuser = isometry(auxiliaryspace(scatter.B2)*auxiliaryspace(scatter.B1),auxiliaryspace(init))'
     sum(map(1:size(init,1)) do row
         len = size(init,2);
-        start = init.CR[row,len]'
-        A_start = TensorMap(zeros,_firstspace(start),auxiliaryspace(scatter.B2)'*_lastspace(start)');
+        start = init.C[row,len]'
+        A_start = zeros(_firstspace(start),auxiliaryspace(scatter.B2)'*_lastspace(start)');
         
         for i in size(init,2):-1:1
             A_start = TransferMatrix(scatter.B2.left_gs.AL[row+i],init.AL[row,i]) * A_start;
@@ -44,7 +45,7 @@ function partialdot(init::LeftGaugedMW,scatter::AssymptoticScatter)
             start = TransferMatrix(init.right_gs.AR[row+i],init.AL[row,i]) * start;
         end
 
-        @plansor  ρ[-1;-2] := scatter.B1[row][3 4;6 1]*inv(scatter.B1.right_gs.CR[row])[1;2]*A_start[2;7 5]*conj(init.VLs[row][3 4;-2 5])*fuser[-1;7 6]
+        @plansor  ρ[-1;-2] := scatter.B1[row][3 4;6 1]*inv(scatter.B1.right_gs.C[row])[1;2]*A_start[2;7 5]*conj(init.VLs[row][3 4;-2 5])*fuser[-1;7 6]
     end)
 end
 
@@ -110,7 +111,8 @@ function MPSKit.environments(init::LeftGaugedMW,toapprox::Tuple{<:MPOHamiltonian
     
     E = real(dot(scatter.B1,MPSKit.effective_excitation_hamiltonian(ham, scatter.B1, Aenvs)) + dot(scatter.B2,MPSKit.effective_excitation_hamiltonian(ham, scatter.B2, Benvs)))
     
-    E += real(energy_shift(ham,left_gs,envs,size(init,2)))
+    # +1 because VL also covers an MPS site...
+    E += real(energy_shift(ham,left_gs,envs,size(init,2)+1)) # same window energy as in ac_proj(::MWenv)
     #E += real(expectation_value(left_gs,ham,size(init,2))); appears to be gone?
     
     lEtype = eltype(lAB)

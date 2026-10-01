@@ -87,7 +87,7 @@ function MPSKit.environments(below::LeftGaugedMW,toapprox::Tuple{<:MPSKit.MPOTen
 
     lBs = map(enumerate(left_above[:,end])) do (i,v)
         map(v) do s
-            @tensor tv[-1 -2;-3 -4] := s[-1,-2,-3,1] * above.CR[i-size(above,2)-1,end][1,-4]
+            @tensor tv[-1 -2;-3 -4] := s[-1,-2,-3,1] * above.C[i-size(above,2)-1,end][1,-4]
         end
     end
     lB = copy(lBs[mod1(2,end)]);
@@ -101,7 +101,7 @@ function MPSKit.environments(below::LeftGaugedMW,toapprox::Tuple{<:MPSKit.MPOTen
 
     rBs = map(enumerate(right_above[:,1])) do (i,v)
         t = map(v) do s
-            @tensor tv[-1 -2;-3] := above.CR[i,0][-1,1]*s[1,-2,-3]
+            @tensor tv[-1 -2;-3] := above.C[i,0][-1,1]*s[1,-2,-3]
         end
 
         MPSKit.transfer_right(t,ham[i],above.VLs[i],below.right_gs.AR[i])*exp(1im*K);
@@ -130,7 +130,7 @@ function MPSKit.environments(below::LeftGaugedMW,toapprox::Tuple{<:MPSKit.MPOTen
         lBEs[row+1,1] = lBs[row] * FusingTransferMatrix(above.right_gs.AR[row],ham[row],below.VLs[row]);
         
         lBEs[row+1,1] += map(lefties[row+1,end,1]) do v
-            @tensor v[-1 -2;-3] := v[-1,-2,1]*above.CR[row-size(above,2),end][1,-3]
+            @tensor v[-1 -2;-3] := v[-1,-2,1]*above.C[row-size(above,2),end][1,-3]
         end
 
 
@@ -141,147 +141,3 @@ function MPSKit.environments(below::LeftGaugedMW,toapprox::Tuple{<:MPSKit.MPOTen
 
     MPOMWenv(lefties,righties,left_above,left_below,right_above,right_below,lBEs,rBEs,above,copy(deps),copy(deps),ham,le,re);
 end
-
-#=
-function MPSKit.leftenv(env::MWenv,row::Int,col::Int,below)
-    a = findfirst(i -> !(below.AL[row,i] === env.left_dependencies[row,i]), 1:(col-1))
-
-    above = env.above;
-    ham = env.opp;
-    K = below.momentum;
-
-    if !isnothing(a)
-        #we need to recalculate
-        for j = a:col-1
-
-            fp = row+j
-
-            #update all left_below
-            env.left_below[fp+1,j+1] = env.left_below[fp,j]*TransferMatrix(below.left_gs.AL[fp],ham[fp],below.AL[row,j])*exp(1im*K);
-
-            #update all lefties
-            for k in 1:size(env.lefties,2)-1
-                env.lefties[fp+1,k+1,j+1] = env.lefties[fp,k,j]* TransferMatrix(above.AL[fp-k,k],ham[fp],below.AL[row,j]);
-            end
-            env.lefties[fp+1,1,j+1] = env.left_below[fp,j]*FusingTransferMatrix(above.VLs[fp],ham[fp],below.AL[row,j]);
-
-            #update all lBEs
-            env.lBEs[fp+1,j+1] = env.lBEs[fp,j] * TransferMatrix(above.right_gs.AR[fp],ham[fp],below.AL[row,j])
-            env.lBEs[fp+1,j+1] += env.lefties[fp+1,end,j+1].*above.CR[fp-size(above,2),end]
-            #=
-            env.lBEs[fp+1,j+1] += map(env.lefties[fp+1,end,j+1]) do v
-                @tensor v[-1 -2;-3] := v[-1,-2,1]*above.CR[fp-size(above,2),end][1,-3]
-            end
-            =#
-            env.left_dependencies[row,j] = below.AL[row,j]
-        end
-    end
-
-    return env.lefties[row+col,:,col],env.lBEs[row+col,col],env.left_below[row+col,col]
-end
-
-function MPSKit.rightenv(env::MWenv,row::Int,col::Int,below)
-    a = findfirst(i -> !(below.AR[row,i] === env.right_dependencies[row,i]), size(below,2):-1:(col+1))
-    
-
-    above = env.above;
-    ham = env.opp;
-    K = below.momentum;
-
-    if !isnothing(a)
-        a = size(below,2)-a+1
-        
-        #we need to recalculate
-        for j = a:-1:col+1
-            fp = row+j
-
-            env.right_below[fp-1,j] = TransferMatrix(below.right_gs.AR[fp],ham[fp],below.AR[row,j])*env.right_below[fp,j+1];
-
-            for k in 1:size(env.righties,2)-1
-                env.righties[fp-1,k,j]  = TransferMatrix(above.AR[fp-k,k],ham[fp],below.AR[row,j])*env.righties[fp,k+1,j+1]
-            end
-            env.righties[fp-1,end,j] = env.right_below[fp-1,j]
-
-            #rBEs
-            env.rBEs[fp-1,j] = TransferMatrix(above.left_gs.AL[fp],ham[fp],below.AR[row,j])*env.rBEs[fp,j+1]*exp(1im*K);
-            @tensor t_AC[-1 -2;-3 -4] := above.VLs[fp][-1 -2;-3 1]*above.CR[fp,0][1;-4]
-            env.rBEs[fp-1,j] += TransferMatrix(t_AC,ham[fp],below.AR[row,j])*env.righties[fp,1,j+1]*exp(1im*K);
-
-            env.right_dependencies[row,j] = below.AR[row,j]
-        end
-    end
-
-    return env.righties[row+col,:,col+1],env.rBEs[row+col,col+1],env.right_below[row+col,col+1]
-end
-
-function ac_proj(row::Int,col::Int,below::LeftGaugedMW,env::MWenv)
-    ham = env.opp;
-
-    (lefties,lBE,left_below) = leftenv(env,row,col,below);
-    (righties,rBE,right_below) = rightenv(env,row,col,below);
-
-    fyspos = row+col;
-
-    local toret
-
-    @floop for (j,k) in keys(ham[fyspos])
-        @tensor t[-1 -2;-3] := lBE[j][-1,6,7]*env.above.right_gs.AR[fyspos][7,2,3]*right_below[k][3,4,-3]*ham[fyspos][j,k][6,-2,2,4]
-        @tensor t[-1 -2;-3] += left_below[j][-1 5;6 7]*env.above.VLs[fyspos][7 4;6 1]*env.above.CR[fyspos,0][1;3]*righties[1][k][3 2;-3]*ham[fyspos][j,k][5 -2;4 2]
-        @tensor t[-1 -2;-3] += left_below[j][-1,2,6,3]*env.above.left_gs.AL[fyspos][3,1,4]*rBE[k][4,5,6,-3]*ham[fyspos][j,k][2,-2,1,5]
-        for i in 1:size(env.above,2)
-            @tensor t[-1 -2;-3] += lefties[i][j][-1,4,5]*env.above.AC[fyspos-i,i][5,1,2]*righties[i+1][k][2,3,-3]*ham[fyspos][j,k][4,-2,1,3]
-        end
-
-        @reduce (toret+=t)
-    end
-
-    expv = expectation_value(below.left_gs,ham,row:(row+max(size(below,2),size(env.above,2))),env.le);
-    
-    if col <= size(env.above,2)
-        @tensor toret[-1 -2;-3] -=(expv*lefties[col][1])[-1,2,1]*env.above.AC[row,col][1,-2,3]*righties[col+1][end][3,2,-3];
-        
-    else
-        @tensor toret[-1 -2;-3] -=(expv*lBE[1])[-1,2,3]*env.above.right_gs.AR[fyspos][3,-2,4]*right_below[end][4,2,-3]
-    end
-
-    return toret
-end
-
-function MPSKit.c_proj(row::Int,col::Int,below::LeftGaugedMW,env::MWenv)
-    ham = env.opp;
-
-    (lefties,lBE,left_below) = leftenv(env,row,col+1,below);
-    (righties,rBE,right_below) = rightenv(env,row,col,below);
-
-    toret = similar(below.CR[row,col])
-
-    fyspos = row+col;
-
-
-    expv = expectation_value(below.left_gs,ham,row:(row+max(size(below,2),size(env.above,2))),env.le);
-    if col <= size(env.above,2)
-        @tensor toret[-1;-2] := -(expv*lefties[col+1][1])[-1,2,1]*env.above.CR[row,col][1;3]*righties[col+1][end][3,2,-2];
-    else
-        @tensor toret[-1;-2] := -(expv*lBE[1])[-1,2,1]*right_below[end][1,2,-2]
-    end
-
-    for j in 1:ham.odim
-        for i in 0:size(env.above,2)-1
-            @tensor toret[-1;-2] += lefties[i+1][j][-1,2,1]*env.above.CR[fyspos-i,i][1;3]*righties[i+1][j][3,2,-2]
-        end
-        @tensor toret[-1;-2] += lBE[j][-1,1,2]*right_below[j][2,1,-2]
-        @tensor toret[-1;-2] += left_below[j][-1,2,6,1]*rBE[j][1,2,6,-2]*exp(-1im*below.momentum)
-
-    end
-
-
-    return toret
-end
-
-function s_proj(below::LeftGaugedMW,env::MWenv)
-    sum(map(1:size(below,1)) do row
-        c = MPSKit.c_proj(row,0,below,env);
-        @tensor y[-1;-2] := below.VLs[row][1,2,-1,3]*(c*adjoint(below.CR[row,0]))[3,4]*conj(below.VLs[row][1,2,-2,4])
-    end)
-end
-=#

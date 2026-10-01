@@ -1,6 +1,3 @@
-#%% definition of leftgauged window with a momentum
-using MPSKit:MPSTensor,MPSBondTensor,MPOTensor,_firstspace,_lastspace,_transpose_tail,_transpose_front,Multiline,LeftGaugedQP;
-
 #=
 Momentum superposition of different windows.
 Every momentum window starts with a VL tensor (gaugefixing).
@@ -27,8 +24,9 @@ function LeftGaugedMW(datfun, len::Int, maxvirtspace, left_gs::InfiniteMPS, righ
 
     VLs = map(left_gs.AL) do al
         vl = convert(TensorMap,adjoint(right_null(adjoint(al))));
-        utl = isomorphism(storagetype(vl),fuse(utilspace*space(vl,3)'),utilspace*space(vl,3)')
-        @plansor VL[-1 -2;-3 -4] := vl[-1 -2;1]*conj(utl[-4;-3 1])
+        # same util-leg convention as MPSKit's LeftGaugedQP (and convert below): the domain of VL holds utilspace itself
+        utl = isomorphism(storagetype(vl),utilspace'*space(vl,3)',fuse(utilspace'*space(vl,3)'))
+        @plansor VL[-1 -2;-3 -4] := vl[-1 -2;1]*utl[-3 1;-4]
     end
 
     variational = Multiline(map(1:length(left_gs)) do row
@@ -56,7 +54,7 @@ function TensorKit.lmul!(s::MPSBondTensor,st::LeftGaugedMW)
         @tensor w2[-1 -2;-3 -4] := st.VLs[row][-1 -2;-3 1]*t[1;-4]
         @show norm(w1-w2)
         =#
-        st.CR[row,0] = t*st.CR[row,0]
+        st.C[row,0] = t*st.C[row,0]
     end
 
     st
@@ -73,7 +71,7 @@ function Base.getproperty(st::LeftGaugedMW,s::Symbol)
 end
 
 MPSKit.istopological(qp::LeftGaugedMW) = qp.left_gs !== qp.right_gs
-MPSKit.istrivial(qp::LeftGaugedMW) = !MPSKit.istopological(qp) && isunit(MPSKit.auxiliarysector(qp))
+MPSKit.istrivial(qp::LeftGaugedMW) = !MPSKit.istopological(qp) && length(sectors(auxiliaryspace(qp))) == 1&& isunit(MPSKit.auxiliarysector(qp))
 MPSKit.auxiliaryspace(st::LeftGaugedMW) = space(st.VLs[1],3);
 MPSKit.auxiliarysector(state::LeftGaugedMW) = only(sectors(auxiliaryspace(state)))
 function TensorKit.normalize!(st::LeftGaugedMW)
@@ -86,13 +84,13 @@ function extend(st::LeftGaugedMW,amount::Int)
         ALs = copy(row.ALs);
         ARs = copy(row.ARs);
         ACs = copy(row.ACs);
-        CLs = copy(row.CLs);
+        Cs = copy(row.Cs);
         append!(ALs,fill(missing,amount));
         append!(ACs,fill(missing,amount));
-        append!(CLs,fill(missing,amount));
+        append!(Cs,fill(missing,amount));
         append!(ARs,st.right_gs.AR[size(st,2)+i+1:size(st,2)+i+amount])
         #@show length(ALs),length(ARs),length(ACs),length(CLs)
-        FiniteMPS(ALs,ARs,ACs,CLs)
+        FiniteMPS(ALs,ARs,ACs,Cs)
     end),st.momentum,st.left_gs,st.right_gs);
 end
 
@@ -108,7 +106,7 @@ function TensorKit.dot(a::LeftGaugedMW,b::LeftGaugedMW)
     sum(map(1:size(a,1)) do row
         @tensor v[-1;-2] := conj(a.VLs[row][1,2,3,-1])*b.VLs[row][1,2,3,-2]
         v = v * TransferMatrix(b.AL[row,:],a.AL[row,:]);
-        tr(adjoint(a.CR[row,end])*v*b.CR[row,end])
+        tr(adjoint(a.C[row,end])*v*b.C[row,end])
     end)
 end
 
@@ -124,7 +122,7 @@ function partialdot(a::LeftGaugedMW,b::LeftGaugedMW)
     end
 
     sum(map(1:size(a,1)) do row
-        t = b.CR[row,end]*a.CR[row,end]'
+        t = b.C[row,end]*a.C[row,end]'
         t = TransferMatrix(b.AL[row,:],a.AL[row,:])*t;
         @tensor s[-1;-2] := b.VLs[row][3 4;-1 1]*t[1;2]*conj(a.VLs[row][3 4;-2 2])
     end)
@@ -139,7 +137,7 @@ function projdown(row,col,a,b,s=isomorphism(auxiliaryspace(b),auxiliaryspace(a))
 
     @tensor lstart[-1;-2] := a.VLs[row][3,2,1,-2]*s[4,1]*conj(b.VLs[row][3,2,4,-1]);
     lstart = lstart* TransferMatrix(a.AL[row,1:col-1],b.AL[row,1:col-1]);
-    rstart = TransferMatrix(a.AR[row,col+1:end],b.AR[row,col+1:end]) * one(a.CR[row,end]);
+    rstart = TransferMatrix(a.AR[row,col+1:end],b.AR[row,col+1:end]) * one(a.C[row,end]);
     @tensor y[-1 -2;-3] := lstart[-1;1]*a.AC[row,col][1 -2;2]*rstart[2;-3]
 end
 
@@ -161,39 +159,6 @@ function Base.convert(::Type{<:LeftGaugedMW},a::LeftGaugedQP)
         FiniteMPS([ac]);
     end)
 
-    LeftGaugedMW(VLs,variational,a.momentum,left_gs,right_gs)
+    LeftGaugedMW(VLs,variational,ComplexF64(a.momentum),left_gs,right_gs)
 end
 
-
-function MPSKit.variance(state::LeftGaugedMW, H::InfiniteMPOHamiltonian, envs = environments(state, H))
-    # I remember there being an issue here @gertian?
-    MPSKit.istopological(state) &&
-        throw(ArgumentError("variance of domain wall excitations is not implemented"))
-    gs = state.left_gs
-
-    e_local = map(1:length(gs)) do i
-        GL = leftenv(envs.le, i, gs)
-        GR = rightenv(envs.re, i, gs)
-        return MPSKit.contract_mpo_expval(gs.AC[i], GL, H[i][:, :, :, end], GR[end])
-    end
-    lattice = physicalspace(H)
-    H_regularized = H - InfiniteMPOHamiltonian(
-        lattice, i => e * id(storagetype(eltype(H)), lattice[i]) for (i, e) in enumerate(e_local)
-    )
-
-    # I don't remember where the formula came from
-    # TODO: this is probably broken
-    E_ex = dot(state.AC[1,1], MPSKitExperimental.ac_proj(1,1,state, envs))
-
-    rescaled_envs = environments(gs, H_regularized)
-    GL = leftenv(rescaled_envs, 1, gs)
-    GR = rightenv(rescaled_envs, 0, gs)
-    E_f = @plansor GL[5 3; 1] * gs.C[0][1; 4] * conj(gs.C[0][5; 2]) * GR[4 3; 2]
-
-    H2 = H_regularized^2
-    envs_2 = environments(state, H2)
-
-    return real(
-        dot(state.AC[1,1], MPSKitExperimental.ac_proj(1,1,state, envs_2)) - 2 * (E_f + E_ex) * E_ex + E_ex^2
-    )
-end

@@ -57,15 +57,20 @@ end
 
 function disk_environments(state,opp,leftstart,rightstart)
 
-    leftenvs = [mktemp()[1] for i in 1:length(state)+1]
-    rightenvs = [mktemp()[1] for i in 1:length(state)+1]
+    leftenvs = [tempname() for i in 1:length(state)+1]
+    rightenvs = [tempname() for i in 1:length(state)+1]
     
     serialize(leftenvs[1],leftstart)
     serialize(rightenvs[end],rightstart)
     
     t = similar(state.AL[1]);
 
-    return ManualDiskBackedEnvs(opp,fill(t,length(state)),fill(t,length(state)),leftenvs,rightenvs,(1,leftstart),(length(state)+1,rightstart));
+    envs = ManualDiskBackedEnvs(opp,fill(t,length(state)),fill(t,length(state)),leftenvs,rightenvs,(1,leftstart),(length(state)+1,rightstart));
+    # tempname only cleans up at exit, which lets long runs (tempdir is often in ram) fill up the tempdir
+    return finalizer(envs) do e
+        foreach(f -> rm(f; force = true), e.leftenvs)
+        foreach(f -> rm(f; force = true), e.rightenvs)
+    end
 end
 
 #notify the cache that we updated in-place, so it should invalidate the dependencies

@@ -82,6 +82,10 @@ module MPSKitExperimental
     include("momentumwindow/timestep.jl")
     include("momentumwindow/mpo_envs.jl")
     include("momentumwindow/find_groundstate.jl")
+    export variance_environments, variance_proj
+    include("momentumwindow/variance.jl")
+    export scatter_lsq!, scatter_galerkin!
+    include("momentumwindow/scattering.jl")
 
     export @tightloop_tensor,@tightloop_planar
     include("tightloop/symbolic.jl")
@@ -91,11 +95,6 @@ module MPSKitExperimental
     
     export parse_fcidump, fused_quantum_chemistry_hamiltonian, disk_environments
     using MPSKit:fill_data!, add_util_leg, l_LL, r_RR
-    # contains most of the "tricks" needed to avoid tensorkit bottlenecks. 
-    # You can play with these files to make them fall back to the default tensorkit implementation
-    #include("quantumchemistry/delayed_factory.jl");
-    #include("quantumchemistry/transpose_factory.jl")
-    #include("quantumchemistry/submult.jl")
     
     # fused_mpoham is a new type of mpohamiltonian, that allows for a "blocking" step
     # I also needed environments - derivatives for this new mpohamiltonian
@@ -114,11 +113,11 @@ module MPSKitExperimental
     #include("quantumchemistry/disk_backed_envs.jl")
     include("quantumchemistry/disk_backed_envs_manual.jl") # alternative to the diskmanager is to manually write data to disk
     
-    #using MPSKit:GrassmannMPS
-    #using GaussianBasis
-    #export CASSCF_Ham, GrassmannSCF;
-    #include("quantumchemistry/grassmann_scf.jl")
-    #include("quantumchemistry/orbopt.jl")
+    # orbital optimization (co-optimized with the mps, or alternating with dmrg)
+    using MPSKit: GrassmannMPS
+    import TensorKitManifolds.Grassmann
+    export QChemIntegrals, GrassmannSCF, DMRGSCF, qchem_rdms, optimize_orbitals, rotate_integrals, rdm_energy, qchem_mpo, active_space, embed_rdms
+    include("quantumchemistry/grassmann_scf.jl")
     
     export tight_AC_hamiltonian
     include("fastmpoham/contractions.jl")
