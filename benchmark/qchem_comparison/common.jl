@@ -47,8 +47,8 @@ The reference state written by `setup.jl` and every MPO variant, keyed by name:
 
 - `opsum`: the OpSum `BipartiteAlgorithm` MPO, real, as `JordanMPOTensor`s
 - `opsum_complex`: the same as OpSum emits it (`ComplexF64`), as in the original notebook
-- `fused`: Maarten's `FusedMPOHamiltonian`
-- `fused_jordan`: the fused MPO converted to `JordanMPOTensor`s, i.e. the same MPO in MPSKit's format
+- `fused`: Maarten's `LinkMPOHamiltonian` (operators on the sites, scalar links)
+- `fused_jordan`: the same hamiltonian converted to `JordanMPOTensor`s on the same bond states, i.e. MPSKit's format
 """
 function load_data()
     isfile(DATAFILE) || error("no data for $FCIDUMP at D = $BOND: run setup.jl first")
@@ -62,16 +62,16 @@ function load_data()
     return (; data.st, data.NORB, hams)
 end
 
-isfused(H) = H isa MPSKitExperimental.FusedMPOHamiltonian
+isfused(H) = H isa MPSKitExperimental.LinkMPOHamiltonian
 fused_environments(st, H) = isfused(H) ? disk_environments(st, H) : environments(st, H, st)
 
 function mpo_summary(io::IO, hams, NORB)
     names = sort!(collect(keys(hams)))
-    bonddims = Dict(k => (isfused(H) ? [length(H[i].imspaces) for i in 1:NORB] : [length(right_virtualspace(H, i).spaces) for i in 1:NORB],
-                          isfused(H) ? [sum(dim, H[i].imspaces) for i in 1:NORB] : [dim(right_virtualspace(H, i)) for i in 1:NORB])
+    bonddims = Dict(k => (isfused(H) ? [length(H.bondspaces[i + 1]) for i in 1:NORB] : [length(right_virtualspace(H, i).spaces) for i in 1:NORB],
+                          isfused(H) ? [sum(dim, H.bondspaces[i + 1]) for i in 1:NORB] : [dim(right_virtualspace(H, i)) for i in 1:NORB])
                     for (k, H) in hams)
-    entries(H, i) = isfused(H) ? length(H[i].blocks) : nonzero_length(H[i].tensors)
-    println(io, "per bond: #channels / total dimension; per site: genuine operator entries (blocks for `fused`)")
+    entries(H, i) = isfused(H) ? length(H.channels[i]) : nonzero_length(H[i].tensors)
+    println(io, "per bond: #bond states / total dimension; per site: genuine operator entries (channels for `fused`)")
     @printf(io, "%5s", "site")
     for k in names
         @printf(io, " %26s", k)

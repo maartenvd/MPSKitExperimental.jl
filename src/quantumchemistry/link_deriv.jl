@@ -237,8 +237,11 @@ function _combine_subblock(sparsified,idx,w,key)
     out
 end
 
+# default for `rankreduce`; a global so that algorithms calling `AC2_hamiltonian` (e.g. DMRG2) can switch it off
+const AC2_RANKREDUCE = Ref(true)
+
 MPSKit.AC2_hamiltonian(pos::Int,below,ham::LinkMPOHamiltonian,above,cache;kwargs...) = link_AC2_hamiltonian(pos,below,ham,cache)
-function link_AC2_hamiltonian(pos::Int,mps,ham::LinkMPOHamiltonian{E,O,Sp},cache) where {E,O,Sp}
+function link_AC2_hamiltonian(pos::Int,mps,ham::LinkMPOHamiltonian{E,O,Sp},cache; rankreduce::Bool = AC2_RANKREDUCE[]) where {E,O,Sp}
 
     le = leftenv(cache,pos,mps);
     re = rightenv(cache,pos+1,mps);
@@ -288,7 +291,13 @@ function link_AC2_hamiltonian(pos::Int,mps,ham::LinkMPOHamiltonian{E,O,Sp},cache
         #d is the dense subblock connecting these two
         d = E[C[lchannel[a],rchannel[b]] for a in rows, b in cols]
         iszero(d) && continue
-        (U,V) = _pqr(d)
+        (U,V) = if rankreduce
+            _pqr(d)
+        else
+            # no compression: one term per block on the smaller side
+            nl,nr = size(d)
+            nl <= nr ? (Matrix{E}(I,nl,nl),d) : (d,Matrix{E}(I,nr,nr))
+        end
         
         # apply U and V, to get the sparsest table
         for t in axes(U,2)

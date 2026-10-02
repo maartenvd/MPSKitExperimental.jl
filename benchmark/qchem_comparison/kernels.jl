@@ -1,7 +1,7 @@
 include("common.jl")
 using BenchmarkTools
 using TensorOperations: BufferAllocator
-using MPSKitExperimental: fused_AC2_hamiltonian
+using MPSKitExperimental: link_AC2_hamiltonian, transfer_left
 
 (; st, NORB, hams) = load_data()
 mpos = envsetting("MPOS", "opsum fused_jordan fused")
@@ -17,14 +17,14 @@ function cases(k, pos, x)
     H, E = hams[k], envs[k]
     if isfused(H)
         GL = MPSKit.leftenv(E, pos, st)
-        Hrr = fused_AC2_hamiltonian(pos, st, H, E; rankreduce = true)
-        Hnorr = fused_AC2_hamiltonian(pos, st, H, E; rankreduce = false)
+        Hrr = link_AC2_hamiltonian(pos, st, H, E; rankreduce = true)
+        Hnorr = link_AC2_hamiltonian(pos, st, H, E; rankreduce = false)
         return [
-            "$k build" => () -> fused_AC2_hamiltonian(pos, st, H, E; rankreduce = false),
-            "$k build (rank red.)" => () -> fused_AC2_hamiltonian(pos, st, H, E; rankreduce = true),
+            "$k build" => () -> link_AC2_hamiltonian(pos, st, H, E; rankreduce = false),
+            "$k build (rank red.)" => () -> link_AC2_hamiltonian(pos, st, H, E; rankreduce = true),
             "$k apply" => () -> Hnorr * x,
             "$k apply (rank red.)" => () -> Hrr * x,
-            "$k transfer_left" => () -> MPSKit.transfer_left(GL, H[pos], st.AL[pos], st.AL[pos]),
+            "$k transfer_left" => () -> transfer_left(GL, H, pos, st.AL[pos]),
         ]
     else
         allocator = BufferAllocator()

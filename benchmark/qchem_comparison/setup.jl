@@ -4,8 +4,8 @@ header()
 (ERI, K, E0, NORB, NELEC, MS2) = parse_fcidump(joinpath(EXAMPLES, FCIDUMP))
 
 t_opsum = @elapsed ham_opsum = opsum_su2_hamiltonian(E0, K, ERI)
-t_fused = @elapsed (ham_fused, _) = fused_quantum_chemistry_hamiltonian(E0, K, ERI, Float64)
-@printf("built OpSum MPO in %.1f s, fused MPO in %.1f s (both include compilation)\n", t_opsum, t_fused)
+t_fused = @elapsed ham_fused = quantum_chemistry_hamiltonian(E0, K, ERI)
+@printf("built OpSum MPO in %.1f s, link hamiltonian in %.1f s (both include compilation)\n", t_opsum, t_fused)
 
 S = Irrep[U₁] ⊠ Irrep[SU₂] ⊠ FermionParity
 psp = Vect[S]((0, 0, 0) => 1, (1, 1 // 2, 1) => 1, (2, 0, 0) => 1)

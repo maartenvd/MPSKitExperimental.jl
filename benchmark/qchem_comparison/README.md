@@ -4,9 +4,9 @@ These scripts compare DMRG2 on the N₂ FCIDUMP examples between:
 
 | Name | MPO | Format / code path |
 | --- | --- | --- |
-| `fused` | `fused_quantum_chemistry_hamiltonian` | `FusedMPOHamiltonian` (this package) |
-| `fused_norr` | same | same, without the QR/LQ rank reduction in `fused_AC2_hamiltonian` |
-| `fused_jordan` | same | `FiniteMPOHamiltonian(fused)`: the same channels as MPSKit `JordanMPOTensor`s |
+| `fused` | `quantum_chemistry_hamiltonian` | `LinkMPOHamiltonian` (this package): channel operators on the sites, scalar link matrices |
+| `fused_norr` | same | same, without the rank reduction (QR per pair of subblock keys) in `link_AC2_hamiltonian` |
+| `fused_jordan` | same | `FiniteMPOHamiltonian(fused)`: the same operator on the same bond states, as MPSKit `JordanMPOTensor`s |
 | `opsum` | `examples/opsum_qchem_su2.jl` (OpSum `BipartiteAlgorithm`) | MPSKit `JordanMPOTensor`s, converted to real scalars |
 | `opsum_complex` | same | as OpSum emits it (`ComplexF64`), as in `examples/is_fusempo_nuttig.ipynb` |
 
@@ -46,6 +46,8 @@ FCIDUMP=N2.STO3G.FCIDUMP julia --project=. sweeps.jl   # full DMRG2 sweeps
 - **Threading.** Defaults are 1 julia thread and 1 BLAS thread. The fused code threads over julia threads; MPSKit's DMRG2 sweep does not.
 
 ## Results
+
+**These numbers are for the previous code** (`FusedMPOHamiltonian` with the QR/LQ rank reduction, commit e77617e on a7d3f30), not for the current `LinkMPOHamiltonian`. The scripts have been ported to the latter (same variant names) and run on STO-3G, where all variants give the same energy and matvecs to ~1e-15; cc-pVDZ has not been re-measured yet.
 
 N₂/cc-pVDZ (28 orbitals), D = 50, 1 thread, warm. Measured 2026-10-02 on a shared workstation (load average 4–20), with the scripts as committed.
 
