@@ -231,8 +231,11 @@ function _rightblock(opp2::FusedSparseBlock{E,O,Sp},re) where {E,O,Sp}
     return blocked_right_blocks
 end
 
+# default for `rankreduce`; a global so that algorithms calling `AC2_hamiltonian` (e.g. DMRG2) can switch it off
+const AC2_RANKREDUCE = Ref(true)
+
 MPSKit.AC2_hamiltonian(pos::Int,below,ham::FusedMPOHamiltonian,above,cache;kwargs...) = fused_AC2_hamiltonian(pos,below,ham,cache)
-function fused_AC2_hamiltonian(pos::Int,mps,ham::FusedMPOHamiltonian{E,O,Sp},cache) where {E,O,Sp}
+function fused_AC2_hamiltonian(pos::Int,mps,ham::FusedMPOHamiltonian{E,O,Sp},cache; rankreduce::Bool = AC2_RANKREDUCE[]) where {E,O,Sp}
     opp1 = ham[pos];
     opp2 = ham[pos+1];
 
@@ -275,7 +278,12 @@ function fused_AC2_hamiltonian(pos::Int,mps,ham::FusedMPOHamiltonian{E,O,Sp},cac
     end
     pairs = map(collect(keys(d_matrices))) do k
         d = d_matrices[k]
-        
+        if !rankreduce
+            # fold the coupling into the smaller side instead of compressing it
+            nl, nr = size(d)
+            return nl <= nr ? k => (Matrix{E}(I, nl, nl), d) : k => (d, Matrix{E}(I, nr, nr))
+        end
+
         (U_s,R_s) = qr(d);
         U = Matrix(U_s);
         R = Matrix(R_s);
