@@ -106,6 +106,7 @@ module MPSKitExperimental
     # the qchem hamiltonian, built once per number of orbitals with symbolic integrals
     export qchem_structure
     include("quantumchemistry/qchem_operator.jl");
+    include("quantumchemistry/jordan_conversion.jl"); # FiniteMPOHamiltonian(::LinkMPOHamiltonian), for comparisons with MPSKit
     
     include("quantumchemistry/fcidump_parser.jl"); # simple parser for fcidump files
 
