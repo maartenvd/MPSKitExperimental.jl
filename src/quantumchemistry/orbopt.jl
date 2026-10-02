@@ -213,7 +213,7 @@ end
 
 function mpo_representation(h::CASSCF_Ham)
     (E,K,ERI) = transform(h);    
-    fused_quantum_chemistry_hamiltonian(E,K,ERI,Float64)
+    quantum_chemistry_hamiltonian(E,K,ERI)
 end
 
 

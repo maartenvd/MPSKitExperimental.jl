@@ -1,7 +1,7 @@
 module MPSKitExperimental
     using TensorKit,MPSKit,TensorOperations,KrylovKit,Strided, OptimKit, TensorKitManifolds
     using FLoops,Transducers,FoldsThreads, ConcurrentCollections
-    using Base.Threads, LinearAlgebra
+    using Base.Threads, LinearAlgebra, SparseArrays
 
     using JLD2
     using MPSKit:MPSTensor,MPSBondTensor,MPOTensor,_firstspace,_lastspace,_transpose_tail,_transpose_front,Multiline,LeftGaugedQP;
@@ -93,24 +93,24 @@ module MPSKitExperimental
     include("tightloop/tensoroperations.jl")
     include("tightloop/planar.jl")
     
-    export parse_fcidump, fused_quantum_chemistry_hamiltonian, disk_environments
+    export parse_fcidump, quantum_chemistry_hamiltonian, disk_environments
     using MPSKit:fill_data!, add_util_leg, l_LL, r_RR
     
-    # fused_mpoham is a new type of mpohamiltonian, that allows for a "blocking" step
-    # I also needed environments - derivatives for this new mpohamiltonian
-    include("quantumchemistry/fused_mpoham.jl");
-    include("quantumchemistry/fused_env.jl");
-    include("quantumchemistry/fused_deriv.jl");
+    # a hamiltonian as on-site operators + scalar link matrices, with its environments and derivatives
+    export LinkMPOHamiltonian, link_channels, link_gradient
+    include("quantumchemistry/link_mpoham.jl");
+    include("quantumchemistry/link_env.jl");
+    include("quantumchemistry/link_deriv.jl");
+    include("quantumchemistry/link_gradient.jl");
 
-    # implements the qchem hamiltonian as a fused_mpoham
+    # the qchem hamiltonian, built once per number of orbitals with symbolic integrals
+    export qchem_structure
     include("quantumchemistry/qchem_operator.jl");
-    include("quantumchemistry/compress.jl"); # minimal compressing step, which removes a bunch of exact zeros, by making the mpoham-bond dimension site dependent
     
     include("quantumchemistry/fcidump_parser.jl"); # simple parser for fcidump files
 
     # diskmanager uses a memory mapped file to store/transfer objects to. This automatically gives async IO
     #include("quantumchemistry/diskmanager.jl")
-    #include("quantumchemistry/disk_backed_envs.jl")
     include("quantumchemistry/disk_backed_envs_manual.jl") # alternative to the diskmanager is to manually write data to disk
     
     # orbital optimization (co-optimized with the mps, or alternating with dmrg)

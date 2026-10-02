@@ -3,7 +3,7 @@ using Serialization
 only left/rightenvs are stored on disk (the entire finitemps is still kept in memory)
 =#
 
-mutable struct ManualDiskBackedEnvs{B<:FusedMPOHamiltonian,C} <: MPSKit.AbstractMPSEnvironments
+mutable struct ManualDiskBackedEnvs{B<:LinkMPOHamiltonian,C} <: MPSKit.AbstractMPSEnvironments
     operator::B #the operator
 
     ldependencies::Vector{C} #the data we used to calculate leftenvs/rightenvs
@@ -24,34 +24,19 @@ Base.deepcopy(d::ManualDiskBackedEnvs) = @assert false;
 #=
     we can surpisingly enough hook into the standard finite env!
 =#
-function disk_environments(state::FiniteMPS,ham::FusedMPOHamiltonian)
-    S = eltype(state.AL)
+# environments on the boundary links (one bond state each)
+function boundary_environments(state::FiniteMPS,ham::LinkMPOHamiltonian)
     lll = l_LL(state);rrr = r_RR(state)
-    rightstart = Vector{S}();leftstart = Vector{S}()
+    util_left = ones(scalartype(state.AL[1]),only(ham.bondspaces[1])');
+    @plansor ctl[-1 -2; -3]:= lll[-1;-3]*util_left[-2]
+    util_right = ones(scalartype(state.AL[1]),only(ham.bondspaces[end]));
+    @plansor ctr[-1 -2; -3]:= rrr[-1;-3]*util_right[-2]
+    return ctl,ctr
+end
 
-    for (i,sp) in enumerate(ham[1].domspaces)
-        util_left = ones(scalartype(S),sp');
-        @plansor ctl[-1 -2; -3]:= lll[-1;-3]*util_left[-2]
-        
-        if i != 1
-            ctl = zero(ctl)
-        end
-
-        push!(leftstart,ctl)
-    end
-
-    for (i,sp) in enumerate(ham[length(state)].imspaces)
-        util_right = ones(scalartype(S),sp');
-        @plansor ctr[-1 -2; -3]:= rrr[-1;-3]*util_right[-2]
-
-        if i != length(ham[length(state)].imspaces)
-            ctr = zero(ctr)
-        end
-
-        push!(rightstart,ctr)
-    end
-
-    return disk_environments(state,ham,leftstart,rightstart)
+function disk_environments(state::FiniteMPS,ham::LinkMPOHamiltonian)
+    (ctl,ctr) = boundary_environments(state,ham)
+    return disk_environments(state,ham,[ctl],[ctr])
 end
 
 
@@ -112,7 +97,7 @@ function MPSKit.rightenv(ca::ManualDiskBackedEnvs{O,E},ind,state)::Vector{E} whe
 
         #we need to recalculate
         for j = a:-1:ind+1
-            store_right!(ca,MPSKit.transfer_right(load_right!(ca,j+1),ca.operator[j],state.AR[j],state.AR[j]),j)
+            store_right!(ca,transfer_right(load_right!(ca,j+1),ca.operator,j,state.AR[j]),j)
             ca.rdependencies[j] = state.AR[j]
         end
     end
@@ -126,7 +111,7 @@ function MPSKit.leftenv(ca::ManualDiskBackedEnvs{O,E},ind,state)::Vector{E} wher
     if !isnothing(a)
         #we need to recalculate
         for j = a:ind-1
-            store_left!(ca,MPSKit.transfer_left(load_left!(ca,j),ca.operator[j],state.AL[j],state.AL[j]),j+1)
+            store_left!(ca,transfer_left(load_left!(ca,j),ca.operator,j,state.AL[j]),j+1)
             ca.ldependencies[j] = state.AL[j]
         end
     end

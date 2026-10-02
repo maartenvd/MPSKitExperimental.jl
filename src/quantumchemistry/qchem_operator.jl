@@ -2,9 +2,12 @@
 
 #=
 
-I took mpskitmodel's implementation of the qchem hamiltonian (which is somewhat readable) and propped it into a fused_mpoham.
-Code is now impossible to read, but essentially identical in spirit to mpskitmodel's implementation
-maybe this can be automated, using something like coallesce?
+I took mpskitmodel's implementation of the qchem hamiltonian (which is somewhat readable) and propped it into
+channels and links. Code is now impossible to read, but essentially identical in spirit to mpskitmodel's implementation.
+
+The builder runs once per number of orbitals with symbolic integrals (LinComb, see link_gradient.jl), so every
+coefficient is a linear combination of θ = (E0, vec(K), vec(V)) and all of them end up in the links.
+quantum_chemistry_hamiltonian evaluates that structure for given integrals, qchem_rdms differentiates it.
 
 =#
 
@@ -17,19 +20,26 @@ find_left_map(o_1,o_2) = (o_2*o_1')*pinv(o_1*o_1');
 # o_1 * x = o_2
 find_right_map(o_1,o_2) = pinv(o_1'*o_1)*o_1'*o_2
 
-function fused_quantum_chemistry_hamiltonian(E0,K,V,Elt=eltype(V))
-    basis_size = size(K,1);
+# θ = (E0, vec(K), vec(V))
+qchem_parameters(E0,K,V) = [E0; vec(K); vec(V)]
+qchem_nparameters(N) = 1+N^2+N^4
+
+function _qchem_symbolic(basis_size::Int,::Type{T}) where T
+    Elt = LinComb{T}
+    E0 = lincomb_param(T,1)
+    K = [lincomb_param(T,1+i) for i in LinearIndices((basis_size,basis_size))]
+    V = [lincomb_param(T,1+basis_size^2+i) for i in LinearIndices((basis_size,basis_size,basis_size,basis_size))]
     half_basis_size = Int(ceil((basis_size+1)/2));
     #@show half_basis_size
     # the phsyical space
     psp = Vect[(Irrep[U₁]⊠Irrep[SU₂] ⊠ FermionParity)]((0,0,0)=>1, (1,1//2,1)=>1, (2,0,0)=>1);
 
-    ap = ones(Elt,psp*Vect[(Irrep[U₁]⊠Irrep[SU₂] ⊠ FermionParity)]((-1,1//2,1)=>1),psp);
+    ap = ones(T,psp*Vect[(Irrep[U₁]⊠Irrep[SU₂] ⊠ FermionParity)]((-1,1//2,1)=>1),psp);
     block(ap,Irrep[U₁](0)⊠Irrep[SU₂](0)⊠FermionParity(0)) .*= -sqrt(2);
     block(ap,Irrep[U₁](1)⊠Irrep[SU₂](1//2)⊠FermionParity(1))  .*= 1;
 
 
-    bm = ones(Elt,psp,Vect[(Irrep[U₁]⊠Irrep[SU₂]⊠FermionParity)]((-1,1//2,1)=>1)*psp);
+    bm = ones(T,psp,Vect[(Irrep[U₁]⊠Irrep[SU₂]⊠FermionParity)]((-1,1//2,1)=>1)*psp);
     block(bm,Irrep[U₁](0)⊠Irrep[SU₂](0)⊠FermionParity(0)) .*= sqrt(2);
     block(bm,Irrep[U₁](1)⊠Irrep[SU₂](1//2)⊠FermionParity(1)) .*= -1;
 
@@ -46,7 +56,7 @@ function fused_quantum_chemistry_hamiltonian(E0,K,V,Elt=eltype(V))
     @plansor b_derp[-1 -2;-3] := bp[1;2 -2]*τ[-3 -1;2 1]
     @plansor b_derp[-1 -2;-3] := bm[1;2 -2]*τ[-3 -1;2 1]
 
-    h_pm = ones(Elt,psp,psp);
+    h_pm = ones(T,psp,psp);
     block(h_pm,Irrep[U₁](0)⊠Irrep[SU₂](0)⊠ FermionParity(0)) .=0;
     block(h_pm,Irrep[U₁](1)⊠Irrep[SU₂](1//2)⊠ FermionParity(1)) .=1;
     block(h_pm,Irrep[U₁](2)⊠Irrep[SU₂](0)⊠ FermionParity(0)) .=2;
@@ -355,28 +365,28 @@ function fused_quantum_chemistry_hamiltonian(E0,K,V,Elt=eltype(V))
     
     
     #println("offset $(sum(length.(op_blocks)))")
-    onsite = fill(add_util_leg(h_pm)*0,basis_size);
-    for i in 1:basis_size
-        onsite[i] += K[i,i]*add_util_leg(h_pm);
-        onsite[i] += V[i,i,i,i]*add_util_leg(h_ppmm);
-        onsite[i] += add_util_leg(one(h_pm))*Elt(E0)/basis_size;
-    end
+    # on-site terms: one channel per operator, the integrals sit in the link to the done channel
+    c_pm = [K[i,i] for i in 1:basis_size];
+    c_ppmm = [V[i,i,i,i] for i in 1:basis_size];
+    c_one = [E0/basis_size for i in 1:basis_size];
     
     for i in 1:half_basis_size-1, j in i+1:half_basis_size
-        onsite[i] -= (V[j,i,j,i]+V[i,j,i,j])*add_util_leg(h_pm);
+        c_pm[i] -= (V[j,i,j,i]+V[i,j,i,j]);
     end
     
     for i in half_basis_size:basis_size, j in i+1:basis_size
-        onsite[j] -= (V[i,j,i,j]+V[j,i,j,i])*add_util_leg(h_pm);
+        c_pm[j] -= (V[i,j,i,j]+V[j,i,j,i]);
     end
     
     for i in 1:half_basis_size-1,j in half_basis_size+1:basis_size
-        onsite[j] -=  add_util_leg(h_pm)*(V[i,j,i,j]+V[j,i,j,i])
+        c_pm[j] -= (V[i,j,i,j]+V[j,i,j,i])
     end
     
     (lmask,rmask) = masks(1,cnt+1);
     for b in 1:basis_size
-        push!(op_blocks[b],(lmask,Elt[Elt(1)],onsite[b],Elt[Elt(1)],rmask));
+        push!(op_blocks[b],(lmask,Elt[Elt(1)],add_util_leg(h_pm),Elt[c_pm[b]],rmask));
+        push!(op_blocks[b],(lmask,Elt[Elt(1)],add_util_leg(h_ppmm),Elt[c_ppmm[b]],rmask));
+        push!(op_blocks[b],(lmask,Elt[Elt(1)],add_util_leg(one(h_pm)),Elt[c_one[b]],rmask));
     end
 
     #----------------
@@ -1284,12 +1294,9 @@ function fused_quantum_chemistry_hamiltonian(E0,K,V,Elt=eltype(V))
         end
     end
 
-    opscal_blocks = Vector{FusedSparseBlock{Elt,O,typeof(psp)}}(undef,basis_size);
+    sitechannels = map(1:basis_size) do i
+        chs = Tuple{Vector{Int},Vector{Elt},O,Vector{Elt},Vector{Int}}[];
 
-    for i in 1:basis_size
-        vecs = Tuple{Vector{Bool},Vector{Elt},Union{Elt,O},Vector{Elt},Vector{Bool}}[];
-
-        
         for (lm,lb,o,rb,rm) in op_blocks[i]
             @assert sum(lm) == length(lb)
             @assert sum(rm) == length(rb)
@@ -1298,54 +1305,62 @@ function fused_quantum_chemistry_hamiltonian(E0,K,V,Elt=eltype(V))
             for sp in  domspaces[i,lm]
                 @assert space(o,1) == sp
             end
-            for sp in domspaces[mod1(i+1,end),rm]
+            for sp in domspaces[i+1,rm]
                 @assert space(o,4)' == sp
             end
-            #@show o
-            push!(vecs,(lm,lb,convert(Union{Elt,O},o),rb,rm));
+            push!(chs,(findall(lm),lb,o,rb,findall(rm)));
         end
         for (lm,lb,o,rb,rm) in scal_blocks[i]
             @assert sum(lm) == length(lb)
             @assert sum(rm) == length(rb)
-
+            @assert isconstant(o) && o.c == 1
             (norm(lb) < 1e-12 || norm(rb) < 1e-12) && continue
             
             left_v = first(domspaces[i,lm]);
             for sp in domspaces[i,lm]
                 @assert left_v == sp
             end
-            for sp in domspaces[mod1(i+1,end),rm]
+            for sp in domspaces[i+1,rm]
                 @assert left_v == sp
             end
 
-            #right_v = adjoint(first(domspaces[mod1(i+1,end),rm]))
+            # identity channel
             virt = isomorphism(storagetype(O),left_v,left_v);
             phys = isomorphism(storagetype(O),psp,psp);
             @plansor to[-1 -2;-3 -4] := virt[-1;1]*phys[-2;2]*τ[1 2;-3 -4]
-            push!(vecs,(lm,lb,convert(Union{Elt,O},o*to),rb,rm));
+            push!(chs,(findall(lm),lb,to,rb,findall(rm)));
         end
-        opscal_blocks[i] = FusedSparseBlock{Elt,O,typeof(psp)}(domspaces[i,:],adjoint.(domspaces[mod1(i+1,end),:]),psp,vecs);
-    end
-    
-    (compressed_ham,mapped) = compress(FusedMPOHamiltonian{Elt,O,typeof(psp)}(opscal_blocks));
-    
-    indmap_1Ls = copy.([indmap_1L for i in 1:length(compressed_ham)+1]);
-    indmap_2Ls = copy.([indmap_2L for i in 1:length(compressed_ham)+1]);
-    indmap_1Rs = copy.([indmap_1R for i in 1:length(compressed_ham)+1]);
-    indmap_2Rs = copy.([indmap_2R for i in 1:length(compressed_ham)+1]);
-    for (loc,m) in enumerate(mapped),
-        symb in [indmap_1Ls,indmap_2Ls,indmap_1Rs,indmap_2Rs]
-        
-        for (i,el) in enumerate(symb[loc])
-            hit = findfirst(x->x==el,m);
-            if isnothing(hit)
-                symb[loc][i] = 0
-            else
-                symb[loc][i] = hit;
-            end
-        end
+        chs
     end
 
+    # environments start on bond state 1 and end on bond state cnt+1
+    return sitechannels,fill(cnt+1,basis_size+1),psp
+end
 
-    compressed_ham,indmap_1Ls, indmap_1Rs, indmap_2Ls, indmap_2Rs
+const _qchem_structures = Dict{Tuple{Int,DataType},Any}()
+const _qchem_structures_lock = ReentrantLock()
+
+"""
+    qchem_structure(N, T = Float64) -> (ops, links, pspaces)
+
+The quantum chemistry hamiltonian on `N` orbitals with symbolic integrals: `links` has `LinComb{T}` entries in
+θ = (E0, vec(K), vec(V)). Built once per `N` and cached.
+"""
+function qchem_structure(N::Int,::Type{T}=Float64) where T
+    @lock _qchem_structures_lock get!(_qchem_structures,(N,T)) do
+        (sitechannels,nstates,psp) = _qchem_symbolic(N,T)
+        (ops,links) = link_channels(sitechannels,nstates)
+        (ops,links,fill(psp,N))
+    end
+end
+
+"""
+    quantum_chemistry_hamiltonian(E0, K, V, T = Float64) -> LinkMPOHamiltonian
+
+E0 + ∑ K[i,j] c⁺ᵢcⱼ + ∑ V[i,j,k,l] c⁺ᵢc⁺ⱼcₖcₗ on a U₁ × SU₂ × fermion parity symmetric chain (the arguments
+are what `parse_fcidump` returns).
+"""
+function quantum_chemistry_hamiltonian(E0,K,V,::Type{T}=Float64) where T
+    (ops,links,pspaces) = qchem_structure(size(K,1),T)
+    LinkMPOHamiltonian(ops,evaluate(links,T.(real.(qchem_parameters(E0,K,V)))),pspaces)
 end
