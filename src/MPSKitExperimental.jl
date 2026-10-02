@@ -105,6 +105,7 @@ module MPSKitExperimental
     # implements the qchem hamiltonian as a fused_mpoham
     include("quantumchemistry/qchem_operator.jl");
     include("quantumchemistry/compress.jl"); # minimal compressing step, which removes a bunch of exact zeros, by making the mpoham-bond dimension site dependent
+    include("quantumchemistry/jordan_conversion.jl"); # FiniteMPOHamiltonian(::FusedMPOHamiltonian), for comparisons with MPSKit
     
     include("quantumchemistry/fcidump_parser.jl"); # simple parser for fcidump files
 
