@@ -1,0 +1,19 @@
+[deps]
+BenchmarkTools = "6e4b80f9-dd63-53aa-95a3-0cdb28fa8baf"
+BlockTensorKit = "5f87ffc2-9cf1-4a46-8172-465d160bd8cd"
+LinearAlgebra = "37e2e46d-f89d-539d-b4ee-838fcccc9c8e"
+MPSKit = "bb1c41ca-d63c-52ed-829e-0820dda26502"
+MPSKitExperimental = "dc5af957-468e-4fce-9c62-67d3e1fd9a40"
+OpSum = "ad22a312-ed53-41dd-b1d0-052652c9fe0a"
+Printf = "de0858da-6303-5e67-8744-51eddeeeb8d7"
+Serialization = "9e88b42a-f829-5b0c-bbe9-9e923198166b"
+TensorKit = "07d1fe3e-3e46-537d-9eac-e9e13d0d4cec"
+TensorOperations = "6aa20fa7-93e2-5fca-9bc0-fbd0db3c71a2"
+
+[sources]
+MPSKit = {url = "https://github.com/QuantumKitHub/MPSKit.jl", rev = "main"}
+MPSKitExperimental = {path = "../.."}
+OpSum = {url = "https://github.com/lkdvos/OpSum.jl", rev = "main"}
+
+[compat]
+julia = "1.11"
