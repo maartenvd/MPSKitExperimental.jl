@@ -47,44 +47,55 @@ FCIDUMP=N2.STO3G.FCIDUMP julia --project=. sweeps.jl   # full DMRG2 sweeps
 
 ## Results
 
-**These numbers are for the previous code** (`FusedMPOHamiltonian` with the QR/LQ rank reduction, commit e77617e on a7d3f30), not for the current `LinkMPOHamiltonian`. The scripts have been ported to the latter (same variant names) and run on STO-3G, where all variants give the same energy and matvecs to ~1e-15; cc-pVDZ has not been re-measured yet.
+N₂/cc-pVDZ (28 orbitals), D = 50, 1 thread, warm, load average ~3. Measured 2026-10-03 with `LinkMPOHamiltonian`
+(per-key-pair rank reduction in `link_AC2_hamiltonian`, environment basis derived from the links). `fused_jordan` runs on
+the same bond states as `fused`, so it benefits from the smaller derived basis too.
 
-N₂/cc-pVDZ (28 orbitals), D = 50, 1 thread, warm. Measured 2026-10-02 on a shared workstation (load average 4–20), with the scripts as committed.
+**Full DMRG2 sweep** (`sweeps.jl`, one warm sweep from the reference state; all variants reach E = -108.7526401832):
 
-**Full DMRG2 sweep** (`sweeps.jl`, one warm sweep from the reference state):
+| Variant | Time per sweep | Relative to `fused_jordan` | Previous code (FusedMPOHamiltonian) |
+| --- | --- | --- | --- |
+| `fused_jordan` | 15.9 s | 1.00× | 20.9 s |
+| `fused` | 17.1 s | 1.07× | 25.0 s |
+| `fused_norr` | 17.6 s | 1.11× | 21.1 s |
+| `opsum` | 100.0 s | 6.28× | 132.8 s |
 
-| Variant | Time per sweep | Relative to `fused_jordan` |
-| --- | --- | --- |
-| `fused_jordan` | 20.9 s | 1.00× |
-| `fused_norr` | 21.1 s | 1.01× |
-| `fused` | 25.0 s | 1.20× |
-| `opsum` | 132.8 s | 6.36× |
-
-**Kernels** (`kernels.jl`, minimum in ms):
+**Kernels** (`kernels.jl`, minimum in ms; bond 15 holds the NC/CN switch, the dense block of V in the link):
 
 | Bond | Case | `opsum` | `fused_jordan` | `fused` | `fused` (rank red.) |
 | --- | --- | --- | --- | --- | --- |
-| 7 | build | 744 | 190 | 146 | 175 |
-| 7 | apply | 5.3 | 3.1 | 2.8 | 4.4 |
-| 7 | transfer_left | 54 | 13 | 27 | — |
-| 14 | build | 13,206 | 932 | 847 | 1,240 |
-| 14 | apply | 17.1 | 5.1 | 14.1 | 34.5 |
-| 14 | transfer_left | 173 | 34 | 103 | — |
-| 21 | build | 876 | 226 | 237 | 270 |
-| 21 | apply | 4.6 | 3.0 | 4.4 | 4.8 |
-| 21 | transfer_left | 101 | 21 | 57 | — |
+| 7 | build | 374 | 99 | 72 | 75 |
+| 7 | apply | 3.9 | 1.7 | 2.3 | 2.2 |
+| 7 | transfer_left | 41 | 10 | 14 | — |
+| 14 | build | 9,957 | 765 | 639 | 828 |
+| 14 | apply | 15.5 | 5.2 | 17.4 | 16.8 |
+| 14 | transfer_left | 144 | 32 | 33 | — |
+| 15 | build | 9,602 | 590 | 310 | 348 |
+| 15 | apply | 15.1 | 5.1 | 10.4 | 10.2 |
+| 15 | transfer_left | 2,079 | 117 | 69 | — |
+| 21 | build | 473 | 102 | 112 | 112 |
+| 21 | apply | 5.1 | 2.1 | 3.7 | 3.5 |
+| 21 | transfer_left | 80 | 15 | 27 | — |
 
-**MPO size** (`setup.jl`; channels / total dimension of the bond to the right of the site, and genuine operator entries, or blocks for `fused`):
+**MPO size** (`setup.jl`; bond states / total dimension of the bond to the right of the site, and genuine operator entries,
+or channels for `fused`):
 
 | Site | `fused` | `fused_jordan` | `opsum` |
 | --- | --- | --- | --- |
-| 7 | 128 / 478, 140 blocks | 128 / 478, 121 entries | 737 / 1451, 475 entries |
-| 14 | 450 / 1738, 462 blocks | 450 / 1738, 204 entries | 2984 / 5924, 1090 entries |
-| 15 | 409 / 1518, 879 blocks | 409 / 1518, 13,412 entries | 2619 / 5197, 353,158 entries |
-| 21 | 163 / 534, 290 blocks | 163 / 534, 455 entries | 765 / 1507, 4,577 entries |
+| 7 | 128 / 478, 142 channels | 128 / 478, 101 entries | 737 / 1451, 475 entries |
+| 14 | 421 / 1678, 436 channels | 421 / 1678, 214 entries | 2984 / 5924, 1090 entries |
+| 15 | 381 / 1462, 853 channels | 381 / 1462, 13,364 entries | 2619 / 5197, 353,158 entries |
+| 21 | 135 / 478, 264 channels | 135 / 478, 455 entries | 765 / 1507, 4,577 entries |
 
 Conclusions:
 
-- **The speedup over the OpSum MPO is the MPO construction, not the format:** on the same MPO, MPSKit's `JordanMPOTensor` path (`fused_jordan`) is as fast as the fused code or faster. The fused format only builds the AC2 Hamiltonian somewhat faster at some bonds, while MPSKit's transfers are 2–3× faster.
-- **The QR/LQ rank reduction in `fused_AC2_hamiltonian` costs time:** `fused_norr` is 16% faster per sweep than `fused`.
-- **The OpSum MPO is 3–4× too large:** see lkdvos/OpSum.jl#38.
+- **The speedup over the OpSum MPO is the MPO construction, not the format** (unchanged from the previous code): on the
+  same operator, MPSKit's `JordanMPOTensor` path is within 7% of the link code per sweep. The OpSum MPO is 3–4× too large,
+  see lkdvos/OpSum.jl#38.
+- **The scalar switch pays off where it should:** at bond 15, where the dense block of V is a scalar link instead of
+  13,364 operator entries, the link code builds the AC2 Hamiltonian 1.9× and grows environments 1.7× faster.
+- **Elsewhere MPSKit is faster:** its AC2 apply is 1.3–3.3× faster at every bond, and its transfers 1.4–1.8× faster at the
+  ordinary bonds. The apply is called many times per eigensolve, which is why `fused_jordan` wins the sweep overall.
+- **Rank reduction now helps a little** (`fused` 17.1 s vs `fused_norr` 17.6 s); in the previous code it cost 16%.
+- Both formats got faster than before (20.9 → 15.9 s, 25.0 → 17.1 s): the environment basis derived from the links has
+  fewer bond states than the hand-built one (4510 vs 4973 summed over bonds).
