@@ -22,20 +22,22 @@ Two ways to minimize E(ψ,U):
 one and two body reduced density matrices of `state`, such that the energy of the hamiltonian
 `quantum_chemistry_hamiltonian(E0,K,V)` is `E0 + sum(K.*dK) + sum(V.*dV)`.
 
-They are the derivatives of the energy with respect to the integrals: the integrals only appear in the links of
-the hamiltonian, so this is `link_gradient` of the symbolic qchem structure (one extra environment sweep).
+They are the derivatives of the energy with respect to the integrals: the integrals only appear in the weights of
+the channels of the hamiltonian, so this is `channel_gradient` of the symbolic qchem structure (one extra
+environment sweep).
 """
-const _qchem_gradient_hamiltonians = Dict{Tuple{Int,DataType},Any}()
-const _qchem_gradient_hamiltonians_lock = ReentrantLock()
+const _qchem_gradient_structures = Dict{Tuple{Int,DataType},Any}()
+const _qchem_gradient_structures_lock = ReentrantLock()
 
 function qchem_rdms(state)
     N = length(state)
     T = real(scalartype(state))
-    (ops,links,pspaces) = qchem_structure(N,T)
-    h = @lock _qchem_gradient_hamiltonians_lock get!(_qchem_gradient_hamiltonians,(N,T)) do
-        gradient_hamiltonian(ops,links,pspaces)
+    (chs,nstates) = @lock _qchem_gradient_structures_lock get!(_qchem_gradient_structures,(N,T)) do
+        (sym,ns,_) = qchem_structure(N,T)
+        (pruned,kept) = prune_channels(sym,ns)
+        (pruned,length.(kept))
     end
-    (g,_) = link_gradient(normalize(state),h,links;nparams=qchem_nparameters(N))
+    (g,_) = channel_gradient(normalize(state),chs,nstates;nparams=qchem_nparameters(N))
     dK = reshape(g[2:1+N^2],N,N)
     dV = reshape(g[2+N^2:end],N,N,N,N)
     (dV,dK)

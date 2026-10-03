@@ -3,10 +3,10 @@
 #=
 
 I took mpskitmodel's implementation of the qchem hamiltonian (which is somewhat readable) and propped it into
-channels and links. Code is now impossible to read, but essentially identical in spirit to mpskitmodel's implementation.
+channels. Code is now impossible to read, but essentially identical in spirit to mpskitmodel's implementation.
 
-The builder runs once per number of orbitals with symbolic integrals (LinComb, see link_gradient.jl), so every
-coefficient is a linear combination of θ = (E0, vec(K), vec(V)) and all of them end up in the links.
+The builder runs once per number of orbitals with symbolic integrals (LinComb, see channel_gradient.jl), so every
+coefficient is a linear combination of θ = (E0, vec(K), vec(V)) and all of them end up in the channel weights.
 quantum_chemistry_hamiltonian evaluates that structure for given integrals, qchem_rdms differentiates it.
 
 =#
@@ -1341,16 +1341,16 @@ const _qchem_structures = Dict{Tuple{Int,DataType},Any}()
 const _qchem_structures_lock = ReentrantLock()
 
 """
-    qchem_structure(N, T = Float64) -> (ops, links, pspaces)
+    qchem_structure(N, T = Float64) -> (chs, nstates, psp)
 
-The quantum chemistry hamiltonian on `N` orbitals with symbolic integrals: `links` has `LinComb{T}` entries in
-θ = (E0, vec(K), vec(V)). Built once per `N` and cached.
+The quantum chemistry hamiltonian on `N` orbitals with symbolic integrals, as channels (see channel_mpo.jl) whose
+weights are `LinComb{T}`s in θ = (E0, vec(K), vec(V)). The bond states are numbered 1 (start) to nstates[b] (done)
+on every bond `b`. Built once per `N` and cached.
 """
 function qchem_structure(N::Int,::Type{T}=Float64) where T
     @lock _qchem_structures_lock get!(_qchem_structures,(N,T)) do
         (sitechannels,nstates,psp) = _qchem_symbolic(N,T)
-        (ops,links) = link_channels(sitechannels,nstates)
-        (ops,links,fill(psp,N))
+        ([[Channel(c...) for c in site] for site in sitechannels],nstates,psp)
     end
 end
 
@@ -1358,17 +1358,14 @@ end
     quantum_chemistry_hamiltonian(E0, K, V, T = Float64) -> FiniteMPOHamiltonian
 
 E0 + ∑ K[i,j] c⁺ᵢcⱼ + ∑ V[i,j,k,l] c⁺ᵢc⁺ⱼcₖcₗ on a U₁ × SU₂ × fermion parity symmetric chain (the arguments
-are what `parse_fcidump` returns), as an MPSKit hamiltonian on the bond basis that `qchem_link_hamiltonian`
-derives.
+are what `parse_fcidump` returns). The builder's bond basis, without the states and channels that vanish for these
+integrals.
 """
-quantum_chemistry_hamiltonian(E0,K,V,::Type{T}=Float64) where T = FiniteMPOHamiltonian(qchem_link_hamiltonian(E0,K,V,T))
-
-"""
-    qchem_link_hamiltonian(E0, K, V, T = Float64) -> LinkMPOHamiltonian
-
-The same hamiltonian as `quantum_chemistry_hamiltonian`, as channel operators and scalar links.
-"""
-function qchem_link_hamiltonian(E0,K,V,::Type{T}=Float64) where T
-    (ops,links,pspaces) = qchem_structure(size(K,1),T)
-    LinkMPOHamiltonian(ops,evaluate(links,T.(real.(qchem_parameters(E0,K,V)))),pspaces)
+function quantum_chemistry_hamiltonian(E0,K,V,::Type{T}=Float64) where T
+    (chs,nstates,_) = qchem_structure(size(K,1),T)
+    (chs,kept) = prune_channels(evaluate_channels(chs,T.(real.(qchem_parameters(E0,K,V)))),nstates)
+    nb = length(kept)
+    pos(b,old) = (p = findfirst(==(old),kept[b]); isnothing(p) && throw(ArgumentError("bond $b lost its start or done state")); p)
+    channel_hamiltonian(chs,length.(kept);start = [b == nb ? 1 : pos(b,1) for b in 1:nb],
+                                          done = [b == 1 ? 1 : pos(b,nstates[b]) for b in 1:nb])
 end

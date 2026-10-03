@@ -1,5 +1,5 @@
 #=
-    In quantum chemistry (and actually generically, noone is stopping you) we're able to put all degrees of freedom on the link matrices.
+    In quantum chemistry (and actually generically, noone is stopping you) we're able to put all degrees of freedom on the scalar weights of the channels.
     And so, we are able to evaluate the gradient of the energy with respect to all degrees of freedom in the hamiltonian automagically.
     And in turn, we're able to construct the derivative with respect to orbital rotations.
 
@@ -73,25 +73,11 @@ end
 evaluate(x::LinComb,θ) = x.c + sum(x.val[i]*θ[x.idx[i]] for i in eachindex(x.idx);init=zero(x.c))
 evaluate(x::Real,θ) = x
 
-"""
-    evaluate(links, θ; tol = 1e-12) -> links with numbers
-
-Entries with absolute value ≤ `tol` are dropped; with `tol = nothing` every structurally present entry stays
-stored, also when it evaluates to zero.
-"""
-function evaluate(links::Vector{<:SparseMatrixCSC{<:LinComb{T}}},θ;tol = 1e-12) where T
-    map(links) do C
-        I,J,V = findnz(C)
-        out = sparse(I,J,T[evaluate(v,θ) for v in V],size(C)...)
-        isnothing(tol) ? out : droptol!(out,tol)
-    end
-end
-
 #=
-    Per-channel environments for link_gradient. Growing an environment through site n: combine the stored
-    environments per channel (axpys with Y or X), one contraction per channel with the mps and the channel
-    operator, then scatter onto the bond states of the next link (axpys). DMRG itself runs on the converted
-    FiniteMPOHamiltonian; these are only needed because the gradient pairs per channel.
+    Per-channel environments for channel_gradient. Growing an environment through site n: combine the bond
+    environments per channel (axpys with lval or rval), one contraction per channel with the mps and the channel
+    operator, then scatter onto the bond states of the next bond (axpys). DMRG itself runs on the MPSKit
+    hamiltonian; these are only needed because the gradient pairs per channel.
 =#
 function _combine(v,idx,val)
     # idx labels the indices you need to grab from v, val labels the values you need to multiply them with
@@ -102,32 +88,30 @@ function _combine(v,idx,val)
     l
 end
 
-# we applied L, we applied O, we have yet to apply R
-function left_channel_envs(v::Vector,h::LinkMPOHamiltonian,n::Int,A,Ab=A)
+# per channel of a site: the left environment through the channel, before its rval
+function left_channel_envs(v::Vector,chs::Vector{<:Channel},A,Ab=A)
     Ab_flipped = convert(TensorMap,transpose(Ab',((1,3),(2,))))
     mapper = Map() do c
         l = _combine(v,c.lidx,c.lval)
         @planar allocator = malloc() y[-1 -2;-3] := l[4 2;1]*A[1 3;-3]*c.op[2 5;3 -2]*Ab_flipped[-1 5;4]
         y
     end
-    tcollect(mapper,h.channels[n])
+    tcollect(mapper,chs)
 end
 
-# same as left_channel_envs, but comming from the right
-function right_channel_envs(v::Vector,h::LinkMPOHamiltonian,n::Int,A,Ab=A)
+# per channel of a site: the right environment through the channel, before its lval
+function right_channel_envs(v::Vector,chs::Vector{<:Channel},A,Ab=A)
     Ab_flipped = convert(TensorMap,transpose(Ab',((1,3),(2,))))
     mapper = Map() do c
         r = _combine(v,c.ridx,c.rval)
         @planar allocator = malloc() nr[-1 -2;-3] := A[-1 2;1]*r[1 3;4]*c.op[-2 5;2 3]*Ab_flipped[4 5;-3]
         nr
     end
-    tcollect(mapper,h.channels[n])
+    tcollect(mapper,chs)
 end
 
-# we need to apply R on top of the left_channel_envs
-# lists[i] gathers "which channels write to channel_i"
-# if none write, it needs to be explicitly initialized to a zero
-# another micro optimization is possible here - if the bond dimension was unchanged, we could re-use those tensors. But they probably live on disk anyway...
+# bond environments from the per-channel ones: lists[a] are the (channel, weight) pairs that land on bond state a;
+# a state nothing lands on is an explicit zero
 function _scatter(ys,lists,zerofor)
     out = Vector{eltype(ys)}(undef,length(lists))
     @floop for a in eachindex(lists)
@@ -145,8 +129,8 @@ function _scatter(ys,lists,zerofor)
     out
 end
 
-# gather all channels that write to i - need this in _scatter
-function _lists(chs::Vector{LinkChannel{E,O}},nstates,side) where {E,O}
+# per bond state: the (channel, weight) pairs that write to it (side = :right) or read from it (side = :left)
+function _lists(chs::Vector{Channel{E,O}},nstates,side) where {E,O}
     lists = [Tuple{Int,E}[] for _ in 1:nstates]
     for (p,c) in enumerate(chs)
         idx,val = side === :right ? (c.ridx,c.rval) : (c.lidx,c.lval)
@@ -157,12 +141,12 @@ function _lists(chs::Vector{LinkChannel{E,O}},nstates,side) where {E,O}
     lists
 end
 
-# environments on the boundary links (one bond state each)
-function boundary_environments(state::FiniteMPS,ham::LinkMPOHamiltonian)
+# environments on the boundary bonds (one bond state each, with virtual spaces Vl and Vr)
+function boundary_environments(state::FiniteMPS,Vl,Vr)
     lll = l_LL(state);rrr = r_RR(state)
-    util_left = ones(scalartype(state.AL[1]),only(ham.bondspaces[1])');
+    util_left = ones(scalartype(state.AL[1]),Vl');
     @plansor ctl[-1 -2; -3]:= lll[-1;-3]*util_left[-2]
-    util_right = ones(scalartype(state.AL[1]),only(ham.bondspaces[end]));
+    util_right = ones(scalartype(state.AL[1]),Vr);
     @plansor ctr[-1 -2; -3]:= rrr[-1;-3]*util_right[-2]
     return ctl,ctr
 end
@@ -173,12 +157,12 @@ _pairleft(l,c) = (@planar A[-1 -2; -3] := conj(l[1 -2; -1]) * c[1; -3]; A)
 _pairright(r,c) = (@planar B[-1 -2; -3] := c[-1; 1] * r[1 -2; -3]; B)
 _pair(l,r,c) = dot(_pairleft(l,c),_pairright(r,c))
 
-# All pairs dot(A,B) between left and right channels at once: per tensor space, one matrix product of the raw data,
+# All pairs dot(A,B) between left and right environments at once: per tensor space, one matrix product of the raw data,
 # with every sector block weighted by its quantum dimension (that is what dot does).
 function _pair_matrix(As::Vector{<:Pair},Bs::Vector{<:Pair})
     bygroup(xs) = (d = Dict{Any,Vector{Int}}(); for (p,(k,t)) in enumerate(xs); push!(get!(d,space(t),Int[]),p); end; d)
     ga = bygroup(As); gb = bygroup(Bs)
-    G = Dict{Tuple{Int,Int},real(scalartype(last(first(As))))}()
+    G = Dict{Tuple{Any,Any},real(scalartype(last(first(As))))}()
     for (sp,pa) in ga
         pb = get(gb,sp,nothing)
         isnothing(pb) && continue
@@ -195,74 +179,73 @@ function _pair_matrix(As::Vector{<:Pair},Bs::Vector{<:Pair})
 end
 
 """
-    gradient_hamiltonian(ops, links, pspaces) -> LinkMPOHamiltonian
+    channel_gradient(ψ, chs, nstates; nparams) -> (g, E)
 
-H(θ = 0) with the full sparsity pattern of the `LinComb` links, so every entry that carries a parameter keeps
-its channels. It does not depend on θ; `link_gradient` needs its environments.
+∂⟨H(θ)⟩/∂θ for a hamiltonian given as channels whose weights are `LinComb`s in θ, pruned (`prune_channels`) so
+that the boundary bonds have one state each; `ψ` must be normalized. The hamiltonian is linear in θ, so every
+path through the channels carries at most one θ-dependent weight, and the derivative with respect to that weight
+pairs the environment of H(θ = 0) left of it with the one right of it. The gradient is independent of θ; E is the
+θ-independent part ⟨H(0)⟩.
 """
-function gradient_hamiltonian(ops,links::Vector{<:SparseMatrixCSC{LinComb{T}}},pspaces) where T
-    np = maximum(C -> maximum(x -> isempty(x.idx) ? 0 : x.idx[end],nonzeros(C);init=0),links)
-    LinkMPOHamiltonian(ops,evaluate(links,zeros(T,np);tol=nothing),pspaces;dropzeros=false)
-end
-
-"""
-    link_gradient(ψ, h, links; nparams) -> (g, E)
-
-`links` with `LinComb` entries and `h = gradient_hamiltonian(ops, links, pspaces)`. Returns ∂⟨H(θ)⟩/∂θ
-(independent of θ for a hamiltonian linear in θ) and the θ-independent part E = ⟨H(0)⟩. `ψ` must be normalized.
-"""
-function link_gradient(ψ::FiniteMPS,h::LinkMPOHamiltonian,links::Vector{<:SparseMatrixCSC{LinComb{T}}};
-                       nparams::Int = maximum(C -> maximum(x -> isempty(x.idx) ? 0 : x.idx[end],nonzeros(C);init=0),links)) where T
+function channel_gradient(ψ::FiniteMPS,chs,nstates;nparams::Int)
     N = length(ψ)
-    (Lb,Rb) = boundary_environments(ψ,h)
+    T = real(scalartype(ψ))
+    ch0 = evaluate_channels(chs,zeros(T,nparams);tol = nothing)
+    spaces = channel_bondspaces(ch0,nstates)
+    (Lb,Rb) = boundary_environments(ψ,only(spaces[1]),only(spaces[N+1]))
     g = zeros(T,nparams)
 
-    # right sweep: the per-channel right environments of every site, kept on disk like the environments
+    # right sweep: per site the per-channel right environments, and the bond environments of the bond right of it,
+    # kept on disk like the environments
     files = [tempname() for _ in 1:N]
     try
         R = [Rb]
         for n in N:-1:1
-            rs = right_channel_envs(R,h,n,ψ.AR[n])
-            serialize(files[n],rs)
-            states = h.bondspaces[n]
-            R = _scatter(rs,_lists(h.channels[n],length(states),:left),
-                         a -> zeros(scalartype(ψ.AR[n]),space(ψ.AR[n],1)*states[a]←space(ψ.AR[n],1)))
+            A = ψ.AR[n]
+            rs = right_channel_envs(R,ch0[n],A)
+            serialize(files[n],(rs,R))
+            R = _scatter(rs,_lists(ch0[n],nstates[n],:left),a -> zeros(scalartype(A),space(A,1)*spaces[n][a]←space(A,1)))
         end
 
-        # left sweep: pair across every link, then grow the left environment with the same per-channel results
+        # left sweep: a θ-dependent lval of a channel on site n pairs the left bond environment it reads with the
+        # right environment through the channel, a θ-dependent rval the left environment through the channel with
+        # the right bond environment it writes
         L = [Lb]
-        E = zero(T)
-        for n in 1:N+1
-            if n == 1
-                ys = Dict(1 => Lb)
-            else
-                yv = left_channel_envs(L,h,n-1,ψ.AL[n-1])
-                ys = Dict(c.k => y for (c,y) in zip(h.channels[n-1],yv))
-                states = h.bondspaces[n]
-                A = ψ.AL[n-1]
-                L = _scatter(yv,_lists(h.channels[n-1],length(states),:right),
-                             a -> zeros(scalartype(A),space(A,3)'*states[a]'←space(A,3)'))
-            end
-            rs = n == N+1 ? Dict(1 => Rb) : Dict(c.k => r for (c,r) in zip(h.channels[n],deserialize(files[n])))
-            c = ψ.C[n-1]
-            n == N+1 && (E = real(_pair(only(L),Rb,c)))
-
-            C = links[n]
-            any(x -> !isconstant(x),nonzeros(C)) || continue
-            G = _pair_matrix([k => _pairleft(y,c) for (k,y) in ys],[k => _pairright(r,c) for (k,r) in rs])
-            rows = rowvals(C); vals = nonzeros(C)
-            for j in 1:size(C,2), p in nzrange(C,j)
-                x = vals[p]
-                isconstant(x) && continue
-                Gij = get(G,(rows[p],j),nothing)
-                isnothing(Gij) && continue
-                for (q,v) in zip(x.idx,x.val)
-                    g[q] += Gij*v
-                end
-            end
+        for n in 1:N
+            A = ψ.AL[n]
+            (rs,Rnext) = deserialize(files[n])
+            ys = left_channel_envs(L,ch0[n],A)
+            _accumulate!(g,chs[n],:lval,L,rs,ψ.C[n-1])
+            _accumulate!(g,chs[n],:rval,ys,Rnext,ψ.C[n])
+            L = _scatter(ys,_lists(ch0[n],nstates[n+1],:right),a -> zeros(scalartype(A),space(A,3)'*spaces[n+1][a]'←space(A,3)'))
         end
-        return g, E
+        return g,real(_pair(only(L),Rb,ψ.C[N]))
     finally
         foreach(f -> rm(f; force = true),files)
     end
+end
+
+# g += Σ (∂weight/∂θ) · ⟨left | right⟩ over the θ-dependent weights of one side of the channels of a site:
+# for :lval the left environments are bond states and the right ones channels, for :rval the other way around
+function _accumulate!(g,chs,side,lefts,rights,c)
+    need = Tuple{Int,Int}[]         # (bond state, channel) pairs
+    for (k,ch) in enumerate(chs), (a,x) in (side === :lval ? zip(ch.lidx,ch.lval) : zip(ch.ridx,ch.rval))
+        (x isa LinComb && !isconstant(x)) && push!(need,(a,k))
+    end
+    isempty(need) && return g
+    states = unique(first.(need)); chans = unique(last.(need))
+    G = if side === :lval
+        _pair_matrix([a => _pairleft(lefts[a],c) for a in states],[k => _pairright(rights[k],c) for k in chans])
+    else
+        _pair_matrix([k => _pairleft(lefts[k],c) for k in chans],[a => _pairright(rights[a],c) for a in states])
+    end
+    for (k,ch) in enumerate(chs), (a,x) in (side === :lval ? zip(ch.lidx,ch.lval) : zip(ch.ridx,ch.rval))
+        (x isa LinComb && !isconstant(x)) || continue
+        Gak = get(G,side === :lval ? (a,k) : (k,a),nothing)
+        isnothing(Gak) && continue
+        for (q,v) in zip(x.idx,x.val)
+            g[q] += Gak*v
+        end
+    end
+    g
 end
