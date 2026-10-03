@@ -102,6 +102,8 @@ module MPSKitExperimental
     include("quantumchemistry/channel_mpo.jl");
     include("quantumchemistry/channel_gradient.jl");
     include("quantumchemistry/qchem_operator.jl");
+    export HermitianHalf
+    include("quantumchemistry/hermitian_half.jl");
     
     include("quantumchemistry/fcidump_parser.jl"); # simple parser for fcidump files
 

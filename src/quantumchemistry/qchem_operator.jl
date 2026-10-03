@@ -1355,17 +1355,41 @@ function qchem_structure(N::Int,::Type{T}=Float64) where T
 end
 
 """
-    quantum_chemistry_hamiltonian(E0, K, V, T = Float64) -> FiniteMPOHamiltonian
+    quantum_chemistry_hamiltonian(E0, K, V, T = Float64; hermitian_half = false)
 
 E0 + ∑ K[i,j] c⁺ᵢcⱼ + ∑ V[i,j,k,l] c⁺ᵢc⁺ⱼcₖcₗ on a U₁ × SU₂ × fermion parity symmetric chain (the arguments
-are what `parse_fcidump` returns). The builder's bond basis, without the states and channels that vanish for these
-integrals.
+are what `parse_fcidump` returns), as a `FiniteMPOHamiltonian` in the builder's bond basis, without the states
+and channels that vanish for these integrals.
+
+With `hermitian_half = true` it is a `HermitianHalf(h)` with h + h† = H: DMRG then only needs h's environments
+(about two thirds of the bond states) and h's precomputed effective operators.
 """
-function quantum_chemistry_hamiltonian(E0,K,V,::Type{T}=Float64) where T
+function quantum_chemistry_hamiltonian(E0,K,V,::Type{T}=Float64;hermitian_half::Bool = false) where T
     (chs,nstates,_) = qchem_structure(size(K,1),T)
-    (chs,kept) = prune_channels(evaluate_channels(chs,T.(real.(qchem_parameters(E0,K,V)))),nstates)
+    chs = evaluate_channels(chs,T.(real.(qchem_parameters(E0,K,V))))
+    hermitian_half && (chs = _qchem_half_channels(chs))
+    (chs,kept) = prune_channels(chs,nstates)
     nb = length(kept)
     pos(b,old) = (p = findfirst(==(old),kept[b]); isnothing(p) && throw(ArgumentError("bond $b lost its start or done state")); p)
-    channel_hamiltonian(chs,length.(kept);start = [b == nb ? 1 : pos(b,1) for b in 1:nb],
-                                          done = [b == 1 ? 1 : pos(b,nstates[b]) for b in 1:nb])
+    h = channel_hamiltonian(chs,length.(kept);start = [b == nb ? 1 : pos(b,1) for b in 1:nb],
+                                              done = [b == 1 ? 1 : pos(b,nstates[b]) for b in 1:nb])
+    return hermitian_half ? HermitianHalf(h) : h
+end
+
+# h with h + h† = H. Every path of H leaves the start state (bond state 1) once, into a bond state with U₁ charge q;
+# its conjugate leaves at the same site with charge -q. Keeping the q > 0 paths, dropping the q < 0 ones and halving
+# the q = 0 ones (a hermitian set on its own) gives h + h† = H exactly.
+function _qchem_half_channels(chs)
+    u1(V) = (cs = unique(first(s.sectors).charge for s in sectors(V)); length(cs) == 1 || error("bond state with mixed charges $cs"); only(cs))
+    map(chs) do site
+        map(site) do c
+            i = findfirst(==(1),c.lidx)
+            (isnothing(i) || c.ridx == [1]) && return c
+            q = u1(space(c.op,4)')
+            q > 0 && return c
+            lv = copy(c.lval); lv[i] *= (q < 0 ? 0 : 1//2)
+            keep = .!iszero.(lv)
+            Channel(c.lidx[keep],lv[keep],c.op,c.rval,c.ridx)
+        end
+    end
 end
