@@ -87,6 +87,86 @@ function evaluate(links::Vector{<:SparseMatrixCSC{<:LinComb{T}}},θ;tol = 1e-12)
     end
 end
 
+#=
+    Per-channel environments for link_gradient. Growing an environment through site n: combine the stored
+    environments per channel (axpys with Y or X), one contraction per channel with the mps and the channel
+    operator, then scatter onto the bond states of the next link (axpys). DMRG itself runs on the converted
+    FiniteMPOHamiltonian; these are only needed because the gradient pairs per channel.
+=#
+function _combine(v,idx,val)
+    # idx labels the indices you need to grab from v, val labels the values you need to multiply them with
+    l = rmul!(copy(v[idx[1]]),val[1])
+    for i in 2:length(idx)
+        l = axpy!(val[i],v[idx[i]],l)
+    end
+    l
+end
+
+# we applied L, we applied O, we have yet to apply R
+function left_channel_envs(v::Vector,h::LinkMPOHamiltonian,n::Int,A,Ab=A)
+    Ab_flipped = convert(TensorMap,transpose(Ab',((1,3),(2,))))
+    mapper = Map() do c
+        l = _combine(v,c.lidx,c.lval)
+        @planar allocator = malloc() y[-1 -2;-3] := l[4 2;1]*A[1 3;-3]*c.op[2 5;3 -2]*Ab_flipped[-1 5;4]
+        y
+    end
+    tcollect(mapper,h.channels[n])
+end
+
+# same as left_channel_envs, but comming from the right
+function right_channel_envs(v::Vector,h::LinkMPOHamiltonian,n::Int,A,Ab=A)
+    Ab_flipped = convert(TensorMap,transpose(Ab',((1,3),(2,))))
+    mapper = Map() do c
+        r = _combine(v,c.ridx,c.rval)
+        @planar allocator = malloc() nr[-1 -2;-3] := A[-1 2;1]*r[1 3;4]*c.op[-2 5;2 3]*Ab_flipped[4 5;-3]
+        nr
+    end
+    tcollect(mapper,h.channels[n])
+end
+
+# we need to apply R on top of the left_channel_envs
+# lists[i] gathers "which channels write to channel_i"
+# if none write, it needs to be explicitly initialized to a zero
+# another micro optimization is possible here - if the bond dimension was unchanged, we could re-use those tensors. But they probably live on disk anyway...
+function _scatter(ys,lists,zerofor)
+    out = Vector{eltype(ys)}(undef,length(lists))
+    @floop for a in eachindex(lists)
+        if isempty(lists[a])
+            out[a] = zerofor(a)
+        else
+            (c,w) = lists[a][1]
+            t = rmul!(copy(ys[c]),w)
+            for (c,w) in Iterators.drop(lists[a],1)
+                t = axpy!(w,ys[c],t)
+            end
+            out[a] = t
+        end
+    end
+    out
+end
+
+# gather all channels that write to i - need this in _scatter
+function _lists(chs::Vector{LinkChannel{E,O}},nstates,side) where {E,O}
+    lists = [Tuple{Int,E}[] for _ in 1:nstates]
+    for (p,c) in enumerate(chs)
+        idx,val = side === :right ? (c.ridx,c.rval) : (c.lidx,c.lval)
+        for (a,w) in zip(idx,val)
+            push!(lists[a],(p,w))
+        end
+    end
+    lists
+end
+
+# environments on the boundary links (one bond state each)
+function boundary_environments(state::FiniteMPS,ham::LinkMPOHamiltonian)
+    lll = l_LL(state);rrr = r_RR(state)
+    util_left = ones(scalartype(state.AL[1]),only(ham.bondspaces[1])');
+    @plansor ctl[-1 -2; -3]:= lll[-1;-3]*util_left[-2]
+    util_right = ones(scalartype(state.AL[1]),only(ham.bondspaces[end]));
+    @plansor ctr[-1 -2; -3]:= rrr[-1;-3]*util_right[-2]
+    return ctl,ctr
+end
+
 # Pairing of a left and a right environment across the bond tensor c: E = Σ_a ⟨L[a] | R[a]⟩. Per channel slice s it
 # is tr(c† L_s c R_s) = ⟨L_s† c, c R_s⟩, so both sides are contracted with c once and every pair is an inner product.
 _pairleft(l,c) = (@planar A[-1 -2; -3] := conj(l[1 -2; -1]) * c[1; -3]; A)

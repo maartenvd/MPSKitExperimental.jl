@@ -9,6 +9,11 @@
 
     Environments can now be stored on the inner index of a factorization of the link matrix.
     Here we automatically derive automatically a decent factorization, you just need to supply links and ops.
+
+    This is a construction format: DMRG runs on FiniteMPOHamiltonian(h) (jordan_conversion.jl), which uses this
+    factorization as its bond basis. On that basis MPSKit's transfers are already optimal (A and Ā once per bond
+    state is a minimum vertex cover of the channel graphs), so the link format only gained a constant factor at
+    the NC/CN switch. The links stay useful for building and for link_gradient (RDMs).
 =#
 
 #=
@@ -25,7 +30,6 @@ struct LinkChannel{E,O}
     lidx::Vector{Int}
     lval::Vector{E}
     op::O
-    lop::O                  # op with its legs arranged for left transfers: (p_in, chan_in) ← (chan_out, p_out)
     rval::Vector{E}
     ridx::Vector{Int}
 end
@@ -92,9 +96,7 @@ function LinkMPOHamiltonian(ops::Vector{Vector{O}},links::Vector{SparseMatrixCSC
         for k in eachindex(ops[n])
             lp = nzrange(Y[n],k); rp = nzrange(Xt,k)
             (isempty(lp) || isempty(rp)) && continue
-            e = ops[n][k]
-            @planar lop[-1 -2; -3 -4] := e[-2 -4; -1 -3]
-            push!(chs,LinkChannel{E,O}(k,rowvals(Y[n])[lp],nonzeros(Y[n])[lp],e,lop,nonzeros(Xt)[rp],rowvals(Xt)[rp]))
+            push!(chs,LinkChannel{E,O}(k,rowvals(Y[n])[lp],nonzeros(Y[n])[lp],ops[n][k],nonzeros(Xt)[rp],rowvals(Xt)[rp]))
         end
         for c in chs
             all(==(space(c.op,1)),bondspaces[n][c.lidx]) || throw(SpaceMismatch("channel $(c.k) on site $n"))

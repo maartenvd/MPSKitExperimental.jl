@@ -1355,12 +1355,20 @@ function qchem_structure(N::Int,::Type{T}=Float64) where T
 end
 
 """
-    quantum_chemistry_hamiltonian(E0, K, V, T = Float64) -> LinkMPOHamiltonian
+    quantum_chemistry_hamiltonian(E0, K, V, T = Float64) -> FiniteMPOHamiltonian
 
 E0 + ∑ K[i,j] c⁺ᵢcⱼ + ∑ V[i,j,k,l] c⁺ᵢc⁺ⱼcₖcₗ on a U₁ × SU₂ × fermion parity symmetric chain (the arguments
-are what `parse_fcidump` returns).
+are what `parse_fcidump` returns), as an MPSKit hamiltonian on the bond basis that `qchem_link_hamiltonian`
+derives.
 """
-function quantum_chemistry_hamiltonian(E0,K,V,::Type{T}=Float64) where T
+quantum_chemistry_hamiltonian(E0,K,V,::Type{T}=Float64) where T = FiniteMPOHamiltonian(qchem_link_hamiltonian(E0,K,V,T))
+
+"""
+    qchem_link_hamiltonian(E0, K, V, T = Float64) -> LinkMPOHamiltonian
+
+The same hamiltonian as `quantum_chemistry_hamiltonian`, as channel operators and scalar links.
+"""
+function qchem_link_hamiltonian(E0,K,V,::Type{T}=Float64) where T
     (ops,links,pspaces) = qchem_structure(size(K,1),T)
     LinkMPOHamiltonian(ops,evaluate(links,T.(real.(qchem_parameters(E0,K,V)))),pspaces)
 end

@@ -2,7 +2,7 @@
     FiniteMPOHamiltonian(ham::LinkMPOHamiltonian)
 
 The same operator as a regular MPSKit `FiniteMPOHamiltonian` on exactly the same bond states (the environment
-basis of `ham`), so that MPSKit's own `JordanMPOTensor` code paths can be compared against the link ones.
+basis of `ham`). This is what DMRG runs on.
 
 The site tensor is W_n[a,b] = Σ_k Y_n[a,k] O_k X_{n+1}[k,b]: every channel contributes `lval[a] * rval[b] * op`
 to the entry `(a, b)`, and channels whose operator is a multiple of the identity become identity scalars.
@@ -54,9 +54,19 @@ function MPSKit.FiniteMPOHamiltonian(ham::LinkMPOHamiltonian)
     end)
 end
 
+# the identity channel operator on (v ⊗ p ← p ⊗ v), built from TensorKit alone (MPSKit's similar_braidingtensor
+# is not in every MPSKit version this package runs with)
+function _identity_operator(e)
+    virt = isomorphism(storagetype(e),space(e,1),space(e,1))
+    phys = isomorphism(storagetype(e),space(e,2),space(e,2))
+    @plansor id_e[-1 -2;-3 -4] := virt[-1;1]*phys[-2;2]*τ[1 2;-3 -4]
+    id_e
+end
+
 function _identity_coefficient(e)
     space(e,1) == space(e,4)' || return nothing
-    id_e = TensorMap(MPSKit.similar_braidingtensor(e))
+    id_e = _identity_operator(e)
+    space(id_e) == space(e) || return nothing
     λ = dot(id_e,e)/dot(id_e,id_e)
     return norm(e - λ*id_e) <= 1.0e-12*max(norm(e),1) ? λ : nothing
 end
@@ -84,7 +94,7 @@ function _jordan_mpotensor(ham::LinkMPOHamiltonian{E},n,λs,lperm,rperm,lpos,rpo
     # an entry with both kinds of contribution has to be stored as a single tensor
     for (key,s) in collect(scalars)
         haskey(tensors,key) || continue
-        axpy!(s,TensorMap(MPSKit.similar_braidingtensor(tensors[key])),tensors[key])
+        axpy!(s,_identity_operator(tensors[key]),tensors[key])
         delete!(scalars,key)
     end
 
@@ -92,7 +102,20 @@ function _jordan_mpotensor(ham::LinkMPOHamiltonian{E},n,λs,lperm,rperm,lpos,rpo
         W[a,1,1,b] = t
     end
     for ((a,b),s) in scalars
-        W[a,1,1,b] = s
+        _setscalar!(W,s,a,b)
     end
     return W
+end
+
+# MPSKit versions differ here: newer JordanMPOTensors store identity entries as scalars, older ones (A/B/C/D
+# blocks) only take tensors and keep the identity corners implicit
+function _setscalar!(W,s,a,b)
+    if hasproperty(W,:scalars)
+        W[a,1,1,b] = s
+    elseif (a,b) == (1,1) && size(W,4) > 1 || (a,b) == (size(W,1),size(W,4)) && size(W,1) > 1
+        isapprox(s,1) || throw(ArgumentError("identity corner ($a,$b) with coefficient $s"))
+    else
+        W[a,1,1,b] = s*_identity_operator(zeros(scalartype(W),MPSKit.eachspace(W)[a,1,1,b]))
+    end
+    W
 end

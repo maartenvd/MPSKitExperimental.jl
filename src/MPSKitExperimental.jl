@@ -96,17 +96,16 @@ module MPSKitExperimental
     export parse_fcidump, quantum_chemistry_hamiltonian, disk_environments
     using MPSKit:fill_data!, add_util_leg, l_LL, r_RR
     
-    # a hamiltonian as on-site operators + scalar link matrices, with its environments and derivatives
+    # a hamiltonian as on-site operators + scalar link matrices: builds the bond basis, converts to a
+    # FiniteMPOHamiltonian for DMRG, and gives energy gradients with respect to the links (RDMs)
     export LinkMPOHamiltonian, link_channels, link_gradient
     include("quantumchemistry/link_mpoham.jl");
-    include("quantumchemistry/link_env.jl");
-    include("quantumchemistry/link_deriv.jl");
     include("quantumchemistry/link_gradient.jl");
 
     # the qchem hamiltonian, built once per number of orbitals with symbolic integrals
-    export qchem_structure
+    export qchem_structure, qchem_link_hamiltonian
     include("quantumchemistry/qchem_operator.jl");
-    include("quantumchemistry/jordan_conversion.jl"); # FiniteMPOHamiltonian(::LinkMPOHamiltonian), for comparisons with MPSKit
+    include("quantumchemistry/jordan_conversion.jl"); # FiniteMPOHamiltonian(::LinkMPOHamiltonian)
     
     include("quantumchemistry/fcidump_parser.jl"); # simple parser for fcidump files
 
