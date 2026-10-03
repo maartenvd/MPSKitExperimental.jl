@@ -25,6 +25,7 @@ struct LinkChannel{E,O}
     lidx::Vector{Int}
     lval::Vector{E}
     op::O
+    lop::O                  # op with its legs arranged for left transfers: (p_in, chan_in) ← (chan_out, p_out)
     rval::Vector{E}
     ridx::Vector{Int}
 end
@@ -91,7 +92,9 @@ function LinkMPOHamiltonian(ops::Vector{Vector{O}},links::Vector{SparseMatrixCSC
         for k in eachindex(ops[n])
             lp = nzrange(Y[n],k); rp = nzrange(Xt,k)
             (isempty(lp) || isempty(rp)) && continue
-            push!(chs,LinkChannel{E,O}(k,rowvals(Y[n])[lp],nonzeros(Y[n])[lp],ops[n][k],nonzeros(Xt)[rp],rowvals(Xt)[rp]))
+            e = ops[n][k]
+            @planar lop[-1 -2; -3 -4] := e[-2 -4; -1 -3]
+            push!(chs,LinkChannel{E,O}(k,rowvals(Y[n])[lp],nonzeros(Y[n])[lp],e,lop,nonzeros(Xt)[rp],rowvals(Xt)[rp]))
         end
         for c in chs
             all(==(space(c.op,1)),bondspaces[n][c.lidx]) || throw(SpaceMismatch("channel $(c.k) on site $n"))

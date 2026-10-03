@@ -42,15 +42,7 @@ Base.:*(a::link_∂∂AC,v) = a(v)
 MPSKit.expectation_value(st::FiniteMPS,th::LinkMPOHamiltonian,envs = environments(st,th)) =
     dot(st.AC[1],link_AC_hamiltonian(1,st,th,envs)(st.AC[1]))/dot(st.AC[1],st.AC[1])
 
-# Precalculates how GLW, GRW acts on AC2, so not a good idea if this precontraction is suboptimal!
-struct link_∂∂AC2{A,W}
-    table::A
-    buffersize::Int
-    space::W # the table indexes raw data, so it is only valid for this space
-end
-
-# The two site effective hamiltonian goes a bit wild, in that I really dig "this piece of matrix needs to be combined with this piece of matrix and this piece, to then go there"
-# that requires explicity decomposing into fusion trees
+# The stacked AC2 halves are filled per fusion tree, which needs the row and column range of every fusion tree in its block
 function blockstructure_dict(W::TensorKit.HomSpace)
     ss = TensorKit.sectorstructure(W)
     ds = TensorKit.degeneracystructure(W)
@@ -60,7 +52,7 @@ end
 # Rebuilds features that used to explicitly exist in TensorKit
 # Per global charge, give a mapping from fusiontrees to the indices in the matrix.
 function rowr_colr_from_fusionblockstructure(W::TensorKit.HomSpace)
-    # the subblock labels (_untrip_row/_untrip_col) are sectors only, without the vertex labels of fusion multiplicities
+    # untested with fusion multiplicities
     FusionStyle(sectortype(W)) isa GenericFusion &&
         throw(ArgumentError("sectors with fusion multiplicities are not supported"))
     ss = TensorKit.sectorstructure(W)
@@ -107,261 +99,165 @@ function rowr_colr_from_fusionblockstructure(W::TensorKit.HomSpace)
     return (rowr,colr)
 end
 
-# Per coupled sector, merge the row (or column) ranges of all fusion trees with the same label into one range.
-# The AC2 table treats that range as a single subblock, which is only right if those trees sit next to each
-# other in the block, so that is checked.
-# (It should be explicitly imposed by tensorkit design - and by now mpskit also relies on this trick)
-function _merge_ranges(r::Dict{S},label,::Type{L}) where {S,L}
-    
-    out = Dict{S,Dict{L,UnitRange{Int}}}()
-
-    for (c,trees) in r
-        merged = get!(out,c,Dict{L,UnitRange{Int}}())
-        
-        total = Dict{L,Int}()
-        
-        for (f,range) in trees
-            q = label(f)
-            merged[q] = haskey(merged,q) ? (min(first(range),first(merged[q])):max(last(range),last(merged[q]))) : range
-            total[q] = get(total,q,0) + length(range)
-        end
-        
-        for (q,range) in merged
-            length(range) == total[q] || error("fusion trees with label $q are not contiguous in the block of $c")
-        end
-    end
-    return out
-end
-
-# label: the last uncoupled sector (the physical sector, for the AC2 codomain)
-_untrip_row(rowr::Dict{S}) where S = _merge_ranges(rowr,f -> f.uncoupled[end],S)
-# label: (last uncoupled, last inner line, second to last uncoupled)
-_untrip_col(colr::Dict{S}) where S = _merge_ranges(colr,f -> (f.uncoupled[end],f.innerlines[end],f.uncoupled[end-1]),Tuple{S,S,S})
-
-
-#---------------------------
-
-# per channel, applies L, then O, then pulls that apart into actions on fusiontrees
-function _leftblock(chs::Vector{<:LinkChannel},le)
-    blocked_left_blocks = map(chs) do c
-        l = _combine(le,c.lidx,c.lval)
-        e = c.op
-
-        @planar allocator=malloc cle[-1 -2;-3 -4 -5] := l[-1 1;-3]*e[1 -2;-4 -5]
-        
-        (rowr,colr) = rowr_colr_from_fusionblockstructure(space(cle))
-        sparsified = Dict{Tuple{sectortype(l),sectortype(l),sectortype(l),sectortype(l),sectortype(l)},Matrix{eltype(l)}}()
-
-        untr_col = _untrip_col(colr)
-        untr_row = _untrip_row(rowr)
-
-        for (q2,b) in blocks(cle)
-            for (q1,rowrange) in untr_row[q2], ((q3,q4,q5),colrange) in untr_col[q2]
-                norm(b[rowrange,colrange],Inf) < 1e-12 && continue
-                
-                sparsified[(q1,q2,q3,q4,q5)] = copy(b[rowrange,colrange])
-            end
-        end
-        
-        # c.k is the index into the channel
-        (sparsified,c.k)
-    end
-
-    filter!(blocked_left_blocks) do (l,k)
-        !isempty(l)
-    end
-    
-    return blocked_left_blocks
-end
-
-# the right counterpart to _leftblock
-function _rightblock(chs::Vector{<:LinkChannel},re)
-    blocked_right_blocks = map(chs) do c
-        r = _combine(re,c.ridx,c.rval)
-        e = c.op
-
-        @planar allocator=malloc cre[-1 -2 -3;-4 -5] := r[-1 1;-4]*e[-3 -5;-2 1]
-        
-        (rowr,colr) = rowr_colr_from_fusionblockstructure(space(cre))
-        sparsified = Dict{Tuple{sectortype(r),sectortype(r),sectortype(r),sectortype(r),sectortype(r)},Matrix{eltype(r)}}()
-
-        untr_col = _untrip_row(colr)
-        untr_row = _untrip_col(rowr)
-
-        for (q2,b) in blocks(cre)
-            for (q1,colrange) in untr_col[q2], ((q3,q4,q6),rowrange) in untr_row[q2]
-                norm(b[rowrange,colrange],Inf) < 1e-12 && continue
-                
-                sparsified[(q6,q4,q3,q2,q1)] = copy(b[rowrange,colrange])
-            end
-        end
-
-        (c.k,sparsified)
-    end
-
-    filter!(blocked_right_blocks) do (k,r)
-        !isempty(r)
-    end
-    
-    return blocked_right_blocks
-end
-
 #=
-    The two-site operator is Σ_{a,b} d[a,b] cle_a ⊗ cre_b over left blocks a and right blocks b, with d the link
-    between the two sites.
+    The two-site operator in MPSKit's precomputed form (MPSKit.PrecomputedDerivative), applied by MPSKit's own code:
+    the environments are contracted with the operators once per eigensolve, the middle link becomes one leg, and
+    the action on AC2 is two block matrix products.
 
-    cle_a and cre_b are block sparse: dictionaries of sector subblocks, keyed by (q1,q2,q3,q4,q5) on the left and
-    (q6,q4,q3,q2,q7) on the right. A left and a right subblock that agree on (q2,q3,q4) form one table entry, i.e.
-    one pair of GEMMs. We can rank reveal to make the mpo cheaper to apply:
+    The middle index runs over the bond states of the environment basis, C = X·Y, the bond MPSKit contracts over for
+    the same hamiltonian. The difference is in building the two halves: here they are sparse scalar sums of
+    per-channel env·operator tensors,
 
-        Σ_{a,b} d[a,b] cle_a[KL] ⊗ cre_b[KR] = Σ_t (Σ_a u_t[a] cle_a[KL]) ⊗ (Σ_b v_t[b] cre_b[KR]),
+        (GL·O)_β = Σ_k X[k,β] (env_k·O_k),   (O·GR)_β = Σ_k Y[β,k] (O_k·env_k),
 
-    with d restricted to the blocks that have KL and the blocks that have KR. 
+    instead of contractions with operator-valued MPO entries (where the dense block of V at the NC/CN switch is
+    expensive for an ordinary MPO).
+
+    Rank reducing C cannot make the middle leg shorter: it can only mix channels whose operators have the same middle
+    space, and per such space X·Y already has the rank of C (checked for N2 cc-pVDZ, every bond).
 =#
 
-# the rank revealing qr
-function _pqr(d)
-    F = qr(d,ColumnNorm())
-    r = count(x->abs(x)>1e-12,diag(F.R))
-    (Matrix(F.Q)[:,1:r],F.R[1:r,:][:,invperm(F.p)])
+# the direct sum of `spaces`, with the range every summand occupies per sector; dual spaces give the dual sum
+function _stacked(spaces::Vector{Sp}) where Sp
+    if all(isdual,spaces)
+        (M,slots) = _stacked(dual.(spaces))
+        return (M',[Dict(dual(s) => r for (s,r) in sl) for sl in slots])
+    end
+    S = sectortype(Sp)
+    total = Dict{S,Int}()
+    slots = map(spaces) do V
+        Dict(s => (o = get(total,s,0); total[s] = o + dim(V,s); (o+1):(o+dim(V,s))) for s in sectors(V))
+    end
+    M = Vect[S]((s => d for (s,d) in total)...)
+    (M,slots)
 end
 
-# Σ_i w[i] * sparsified[idx[i]][key], or nothing if every weight vanishes
-function _combine_subblock(sparsified,idx,w,key)
-    out = nothing
-    for (i,j) in enumerate(idx)
-        abs(w[i]) < 1e-12 && continue
-        b = sparsified[j][key]
-        out = isnothing(out) ? b*w[i] : axpy!(w[i],b,out)
-    end
-    out
-end
-
-# default for `rankreduce`; a global so that algorithms calling `AC2_hamiltonian` (e.g. DMRG2) can switch it off
-const AC2_RANKREDUCE = Ref(true)
-
-MPSKit.AC2_hamiltonian(pos::Int,below,ham::LinkMPOHamiltonian,above,cache;kwargs...) = link_AC2_hamiltonian(pos,below,ham,cache)
-function link_AC2_hamiltonian(pos::Int,mps,ham::LinkMPOHamiltonian{E,O,Sp},cache; rankreduce::Bool = AC2_RANKREDUCE[]) where {E,O,Sp}
-
-    le = leftenv(cache,pos,mps);
-    re = rightenv(cache,pos+1,mps);
-
-    p1 = ham.pspaces[pos];
-    p2 = ham.pspaces[pos+1];
-
-    v1 = left_virtualspace(mps,pos);
-    v2 = right_virtualspace(mps,pos+1);
-
-    ac2_structure = v1*p1 ← v2*(p2)'
-
-    S = sectortype(ac2_structure)
-
-    ac2_blockstructure = blockstructure_dict(ac2_structure)
-    (rowr_ac2,colr_ac2) = rowr_colr_from_fusionblockstructure(ac2_structure)
-    left_ac2_untrp = _untrip_row(rowr_ac2)
-    right_ac2_untrp = _untrip_row(colr_ac2)
-    
-    
-    blocked_left_blocks = _leftblock(ham.channels[pos],le)
-    blocked_right_blocks = _rightblock(ham.channels[pos+1],re)
-    
-    lsparse = [b[1] for b in blocked_left_blocks]; lchannel = [b[2] for b in blocked_left_blocks]
-    rsparse = [b[2] for b in blocked_right_blocks]; rchannel = [b[1] for b in blocked_right_blocks]
-
-    # which blocks have a given subblock key
-    K = NTuple{5,S}
-    lrows = Dict{K,Vector{Int}}(); rcols = Dict{K,Vector{Int}}()
-    for (a,sp) in enumerate(lsparse), key in keys(sp); push!(get!(lrows,key,Int[]),a); end
-    for (b,sp) in enumerate(rsparse), key in keys(sp); push!(get!(rcols,key,Int[]),b); end
-
-    # right keys (q6,q4,q3,q2,q7) by the (q2,q3,q4) a left key (q1,q2,q3,q4,q5) has to match
-    rbymatch = Dict{NTuple{3,S},Vector{K}}()
-    for key in keys(rcols); push!(get!(rbymatch,(key[4],key[3],key[2]),K[]),key); end
-
-    # compatible key pairs, grouped by the blocks they see
-    groups = Dict{Tuple{Vector{Int},Vector{Int}},Vector{Tuple{K,K}}}()
-    for (kl,rows) in lrows, kr in get(rbymatch,(kl[2],kl[3],kl[4]),K[])
-        push!(get!(groups,(rows,rcols[kr]),Tuple{K,K}[]),(kl,kr))
-    end
-
-    C = ham.links[pos+1]
-    table = Tuple{Tuple{Int,Int},Tuple{Int,Int},Int,Tuple{Int,Int},Tuple{Int,Int},Int,Matrix{eltype(O)},Matrix{eltype(O)}}[]
-    for ((rows,cols),pairs) in groups
-
-        #d is the dense subblock connecting these two
-        d = E[C[lchannel[a],rchannel[b]] for a in rows, b in cols]
-        iszero(d) && continue
-        (U,V) = if rankreduce
-            _pqr(d)
-        else
-            # no compression: one term per block on the smaller side
-            nl,nr = size(d)
-            nl <= nr ? (Matrix{E}(I,nl,nl),d) : (d,Matrix{E}(I,nr,nr))
+# channels with the same operator (same value and spaces), as lists of positions in `chs`
+function _opgroups(chs)
+    gid = Dict{Any,Int}(); groups = Vector{Vector{Int}}()
+    for (p,c) in enumerate(chs)
+        g = get!(gid,(space(c.op),c.op.data)) do
+            push!(groups,Int[]); length(groups)
         end
-        
-        # apply U and V, to get the sparsest table
-        for t in axes(U,2)
-            lcomb = Dict(kl => _combine_subblock(lsparse,rows,view(U,:,t),kl) for kl in unique(first.(pairs)))
-            rcomb = Dict(kr => _combine_subblock(rsparse,cols,view(V,t,:),kr) for kr in unique(last.(pairs)))
-            for (kl,kr) in pairs
-                block_l = lcomb[kl]; block_r = rcomb[kr]
-                (isnothing(block_l) || isnothing(block_r)) && continue
-                (q1,q2,q3,q4,q5) = kl
-                (q6,_,_,_,q7) = kr
+        push!(groups[g],p)
+    end
+    groups
+end
 
-                (d1_1,d2_1),br = ac2_blockstructure[q2]
-                sl1_1 = left_ac2_untrp[q2][q1]
-                sl1_2 = right_ac2_untrp[q2][q7]
-                offset_1 = (sl1_1.start-1)+(sl1_2.start-1)*d1_1+(br.start-1)
+# per operator group and middle bond state: the weighted channels, (positions, weights)
+function _bystate(chs,groups,side)
+    map(groups) do g
+        d = Dict{Int,Tuple{Vector{Int},Vector{eltype(first(chs).lval)}}}()
+        for p in g
+            c = chs[p]
+            idx,val = side === :right ? (c.ridx,c.rval) : (c.lidx,c.lval)
+            for (β,w) in zip(idx,val)
+                (ps,ws) = get!(() -> (Int[],eltype(val)[]),d,β)
+                push!(ps,p); push!(ws,w)
+            end
+        end
+        d
+    end
+end
 
-                (d1_2,d2_2),br = ac2_blockstructure[q4]
-                sl2_1 = left_ac2_untrp[q4][q5]
-                sl2_2 = right_ac2_untrp[q4][q6]
-                offset_2 = (sl2_1.start-1)+(sl2_2.start-1)*d1_2+(br.start-1)
-
-                push!(table,((length(sl1_1),length(sl1_2)),(1,d1_1),offset_1,(length(sl2_1),length(sl2_2)),(1,d1_2),offset_2,block_l,block_r))
+# adds the blocks of a term t into the stacked tensor: every fusion tree goes to the range of its sector's slot
+# along the stacked leg (rows if the stacked leg is in the codomain, columns if it is in the domain)
+function _addslots!(bigblocks,t,plan,slot,dir)
+    for (q,entries) in plan
+        b = block(t,q); bb = bigblocks[q]
+        for (r,base,sec) in entries
+            sl = slot[sec]; n = length(r)
+            dst = base + (first(sl)-1)*n
+            if dir === :rows
+                axpy!(true,view(b,r,:),view(bb,dst:(dst+n*length(sl)-1),:))
+            else
+                axpy!(true,view(b,:,r),view(bb,:,dst:(dst+n*length(sl)-1)))
             end
         end
     end
+    bigblocks
+end
 
-    buffersize = maximum(table;init=0) do (size_1,stride_1,offset_1,size_2,stride_2,offset_2,left,right)
-        size(left,1)*size_2[2]
+# backend and allocator are the ones MPSKit's algorithms pass (DMRG2 hands in a BufferAllocator for the matvecs)
+MPSKit.AC2_hamiltonian(pos::Int,below,ham::LinkMPOHamiltonian,above,cache;
+                       backend = TensorOperations.DefaultBackend(),allocator = TensorOperations.DefaultAllocator(),kwargs...) =
+    link_AC2_hamiltonian(pos,below,ham,cache;backend,allocator)
+function link_AC2_hamiltonian(pos::Int,mps,ham::LinkMPOHamiltonian{E},cache;
+                              backend = TensorOperations.DefaultBackend(),allocator = TensorOperations.DefaultAllocator()) where E
+    le = leftenv(cache,pos,mps);
+    re = rightenv(cache,pos+1,mps);
+    T = scalartype(le[1])
+    TT = tensormaptype(spacetype(le[1]),3,2,storagetype(le[1]))
+    structure = Dict{Any,Any}()   # row/column ranges of every fusion tree in its block, per space
+    ranges(W) = get!(() -> rowr_colr_from_fusionblockstructure(W),structure,W)
+    nmid = length(ham.bondspaces[pos+1])
+    # the stacked halves and the per-term pieces are temporaries (only the repartitioned halves are kept), so they
+    # come from the allocator, as in MPSKit's _prepare_GL_O; the terms are therefore built one after the other
+    cp = TensorOperations.allocator_checkpoint!(allocator)
+
+    # GL·O, as MPSKit lays it out: (v_out ⊗ p_out ⊗ middle) ← (v_in ⊗ p_in). Per middle bond state β and per
+    # operator O the left environments are first combined with the link scalars (small tensors), then
+    # contracted with O once: Σ_k X[k,β] env_k·O_k = Σ_O (Σ_{k with O} X[k,β] env_k)·O.
+    lchs = ham.channels[pos]
+    ls = [_combine(le,c.lidx,c.lval) for c in lchs]
+    lgroups = _opgroups(lchs)
+    lterms = [(g,β,ps,ws) for (g,d) in zip(lgroups,_bystate(lchs,lgroups,:right)) for (β,(ps,ws)) in d]
+    midspace = Vector{Any}(undef,nmid)
+    for (g,β,_,_) in lterms; midspace[β] = space(lchs[first(g)].op,4); end
+    (M,slots) = _stacked(identity.(midspace))
+    l1 = first(ls); o1 = lchs[first(first(lterms)[1])].op
+    GLO = TensorOperations.tensoralloc(TT,space(l1,1) ⊗ space(o1,2) ⊗ M ← domain(l1)[1] ⊗ domain(o1)[1],Val(true),allocator)
+    zerovector!(GLO)
+    (rowrL,_) = ranges(space(GLO))
+    # the middle leg is the last codomain leg: a bond state is a contiguous range of rows of every fusion tree.
+    # Where every fusion tree of a term goes only depends on the term's space, so that is worked out once per space.
+    rowplan = Dict{Any,Any}()
+    plan_rows(W) = get!(rowplan,W) do
+        (rowr,_) = ranges(W)
+        [q => [(rr,first(rowrL[q][f1]),f1.uncoupled[3]) for (f1,rr) in rowr[q]] for q in keys(rowr)]
     end
-    link_∂∂AC2(table,buffersize,ac2_structure)
-end
-
-
-function _reduce_ac2(table,x,basesize,buffersize)
-    if length(table) <= basesize
-        toret = zero(x)
-
-        cur_buffer = tensoralloc(storagetype(x), buffersize, Val(true), malloc)
-
-        for (size_1,stride_1,offset_1,size_2,stride_2,offset_2,left,right) in table
-            v1 = StridedView(toret.data,size_1,stride_1,offset_1)
-            v2 = StridedView(x.data,size_2,stride_2,offset_2)
-            dst = StridedView(cur_buffer,(size(left,1),size(v2,2)),(1,size(left,1)))
-
-            mul!(dst,StridedView(left),v2)
-            mul!(v1,dst,StridedView(right),true,true)
-        end
-
-        tensorfree!(cur_buffer, malloc)
-
-        return toret
-    else
-
-        spl = Int(ceil(length(table)/2));
-        t = @Threads.spawn _reduce_ac2(view(table,1:spl),x,basesize,buffersize)
-        toret = _reduce_ac2(view(table,spl+1:length(table)),x,basesize,buffersize)
-        axpy!(true,fetch(t),toret)
-        return toret
+    GLOblocks = Dict(q => b for (q,b) in blocks(GLO))
+    for (g,β,ps,ws) in lterms
+        l = _combine(ls,ps,ws)
+        op = lchs[first(g)].op
+        glo = TensorOperations.tensoralloc(TT,space(l,1) ⊗ space(op,2) ⊗ space(op,4) ← domain(l)[1] ⊗ domain(op)[1],Val(true),allocator)
+        @planar backend = backend allocator = allocator glo[-1 -2 -3; -4 -5] = l[-1 1; -4]*op[1 -2; -5 -3]
+        _addslots!(GLOblocks,glo,plan_rows(space(glo)),slots[β],:rows)
+        TensorOperations.tensorfree!(glo,allocator)
     end
-end
 
-function (h::link_∂∂AC2)(x)
-    space(x) == h.space || throw(SpaceMismatch("AC2 space $(space(x)) does not match $(h.space)"))
-    _reduce_ac2(h.table,x,ceil(length(h.table)/nthreads()),h.buffersize)
-end
+    # O·GR: (v_in ⊗ p_in) ← (v_out ⊗ p_out ⊗ middle), the same way with the link scalars Y
+    TR = tensormaptype(spacetype(re[1]),2,3,storagetype(re[1]))
+    rchs = ham.channels[pos+1]
+    rs = [_combine(re,c.ridx,c.rval) for c in rchs]
+    rgroups = _opgroups(rchs)
+    rterms = [(g,β,ps,ws) for (g,d) in zip(rgroups,_bystate(rchs,rgroups,:left)) for (β,(ps,ws)) in d]
+    for (g,β,_,_) in rterms; midspace[β] = space(rchs[first(g)].op,1)'; end
+    (Mr,rslots) = _stacked(identity.(midspace))
+    r1 = first(rs); o2 = rchs[first(first(rterms)[1])].op
+    OGR = TensorOperations.tensoralloc(TR,space(r1,1) ⊗ space(o2,3) ← domain(r1)[1] ⊗ space(o2,2)' ⊗ Mr,Val(true),allocator)
+    zerovector!(OGR)
+    (_,colrR) = ranges(space(OGR))
+    # the middle leg is the last domain leg: a contiguous range of columns of every fusion tree
+    colplan = Dict{Any,Any}()
+    plan_cols(W) = get!(colplan,W) do
+        (_,colr) = ranges(W)
+        [q => [(cr,first(colrR[q][f2]),f2.uncoupled[3]) for (f2,cr) in colr[q]] for q in keys(colr)]
+    end
+    OGRblocks = Dict(q => b for (q,b) in blocks(OGR))
+    for (g,β,ps,ws) in rterms
+        r = _combine(rs,ps,ws)
+        op = rchs[first(g)].op
+        ogr = TensorOperations.tensoralloc(TR,space(r,1) ⊗ space(op,3) ← domain(r)[1] ⊗ space(op,2)' ⊗ space(op,1)',Val(true),allocator)
+        @planar backend = backend allocator = allocator ogr[-1 -2; -4 -5 -3] = op[-3 -5; -2 1]*r[-1 1; -4]
+        _addslots!(OGRblocks,ogr,plan_cols(space(ogr)),rslots[β],:cols)
+        TensorOperations.tensorfree!(ogr,allocator)
+    end
 
-Base.:*(a::link_∂∂AC2,v) = a(v)
+    Lp = repartition(MPSKit.fuse_legs(GLO,1,2),2,2;copy = true,backend,allocator)
+    Rp = repartition(MPSKit.fuse_legs(OGR,2,1),2,2;copy = true,backend,allocator)
+    TensorOperations.tensorfree!(GLO,allocator)
+    TensorOperations.tensorfree!(OGR,allocator)
+    TensorOperations.allocator_reset!(allocator,cp)
+    return MPSKit.PrecomputedDerivative(Lp,Rp,backend,allocator)
+end

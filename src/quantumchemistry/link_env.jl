@@ -76,16 +76,65 @@ function _lists(chs::Vector{LinkChannel{E,O}},nstates,side) where {E,O}
     lists
 end
 
+#=
+    The order MPSKit uses for a sparse MPO: contract every incoming bond state with the mps tensor once, apply the
+    operators, and contract every outgoing bond state with the conjugate tensor once. The first contraction leaves
+    its result in the layout the operators need, so per channel there is only a combination of incoming bond
+    states (axpys with the link scalars) and one matrix product with the operator; the outgoing bond states are
+    again scalar combinations. The large contractions (with their permutations) happen once per incoming and once
+    per outgoing bond state, independent of the number of channels, and operators only ever meet scalar
+    combinations, never operator-valued MPO entries.
+=#
 function transfer_left(v::Vector,h::LinkMPOHamiltonian,n::Int,A,Ab=A)
-    ys = left_channel_envs(v,h,n,A,Ab)
+    chs = h.channels[n]
+    Ab_flipped = convert(TensorMap,transpose(Ab',((1,3),(2,))))
     states = h.bondspaces[n+1]
-    _scatter(ys,_lists(h.channels[n],length(states),:right),
-             a -> zeros(scalartype(A),space(Ab,3)'*states[a]'←space(A,3)'))
+
+    # every incoming bond state times A, as (v_out, bra) ← (phys, chan)
+    reads = sort!(unique!(reduce(vcat,[c.lidx for c in chs];init=Int[])))
+    vAs = tcollect(Map(a -> (@planar t[-1 -2; -3 -4] := v[a][-2 -4; 1]*A[1 -3; -1]; t)),reads)
+    vA = Dict(zip(reads,vAs))
+
+    # per channel: (v_out, bra) ← (chan_out, p_out)
+    zs = tcollect(Map(c -> _combine(vA,c.lidx,c.lval)*c.lop),chs)
+
+    lists = _lists(chs,length(states),:right)
+    out = Vector{eltype(v)}(undef,length(states))
+    @floop for b in eachindex(lists)
+        if isempty(lists[b])
+            out[b] = zeros(scalartype(A),space(Ab,3)'*states[b]'←space(A,3)')
+        else
+            zb = _combine(zs,first.(lists[b]),last.(lists[b]))
+            @planar y[-1 -2; -3] := zb[-3 1; -2 2]*Ab_flipped[-1 2; 1]
+            out[b] = y
+        end
+    end
+    out
 end
 
 function transfer_right(v::Vector,h::LinkMPOHamiltonian,n::Int,A,Ab=A)
-    rs = right_channel_envs(v,h,n,A,Ab)
+    chs = h.channels[n]
+    Ab_flipped = convert(TensorMap,transpose(Ab',((1,3),(2,))))
     states = h.bondspaces[n]
-    _scatter(rs,_lists(h.channels[n],length(states),:left),
-             a -> zeros(scalartype(A),space(A,1)*states[a]←space(Ab,1)))
+
+    # A times every incoming bond state, as (phys, chan) ← (v_out, bra)
+    reads = sort!(unique!(reduce(vcat,[c.ridx for c in chs];init=Int[])))
+    Avs = tcollect(Map(b -> (@planar t[-1 -2; -3 -4] := A[-3 -1; 1]*v[b][1 -2; -4]; t)),reads)
+    Av = Dict(zip(reads,Avs))
+
+    # per channel: (chan_left, p_out) ← (v_out, bra)
+    zs = tcollect(Map(c -> c.op*_combine(Av,c.ridx,c.rval)),chs)
+
+    lists = _lists(chs,length(states),:left)
+    out = Vector{eltype(v)}(undef,length(states))
+    @floop for a in eachindex(lists)
+        if isempty(lists[a])
+            out[a] = zeros(scalartype(A),space(A,1)*states[a]←space(Ab,1))
+        else
+            za = _combine(zs,first.(lists[a]),last.(lists[a]))
+            @planar y[-1 -2; -3] := za[-2 1; -1 2]*Ab_flipped[2 1; -3]
+            out[a] = y
+        end
+    end
+    out
 end
