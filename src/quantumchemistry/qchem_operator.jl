@@ -1363,16 +1363,26 @@ and channels that vanish for these integrals.
 
 With `hermitian_half = true` it is a `HermitianHalf(h)` with h + h† = H: DMRG then only needs h's environments
 (about two thirds of the bond states) and h's precomputed effective operators.
+
+With `split_sectors = true` every bond state carries a single sector (same cost), so that hermitian-conjugate bond
+states pair up one to one, which `paired_environments` needs.
 """
-function quantum_chemistry_hamiltonian(E0,K,V,::Type{T}=Float64;hermitian_half::Bool = false) where T
+function quantum_chemistry_hamiltonian(E0,K,V,::Type{T}=Float64;hermitian_half::Bool = false,split_sectors::Bool = false) where T
     (chs,nstates,_) = qchem_structure(size(K,1),T)
     chs = evaluate_channels(chs,T.(real.(qchem_parameters(E0,K,V))))
     hermitian_half && (chs = _qchem_half_channels(chs))
     (chs,kept) = prune_channels(chs,nstates)
     nb = length(kept)
+    # where the builder's start (1) and done (nstates) states ended up
     pos(b,old) = (p = findfirst(==(old),kept[b]); isnothing(p) && throw(ArgumentError("bond $b lost its start or done state")); p)
-    h = channel_hamiltonian(chs,length.(kept);start = [b == nb ? 1 : pos(b,1) for b in 1:nb],
-                                              done = [b == 1 ? 1 : pos(b,nstates[b]) for b in 1:nb])
+    start = [b == nb ? 1 : pos(b,1) for b in 1:nb]; done = [b == 1 ? 1 : pos(b,nstates[b]) for b in 1:nb]
+    ns = length.(kept)
+    if split_sectors
+        (chs,ns,parts) = MPSKitExperimental.split_sectors(chs,ns)
+        start = [findfirst(p -> p[1] == start[b],parts[b]) for b in 1:nb]
+        done = [findfirst(p -> p[1] == done[b],parts[b]) for b in 1:nb]
+    end
+    h = channel_hamiltonian(chs,ns;start,done)
     return hermitian_half ? HermitianHalf(h) : h
 end
 
