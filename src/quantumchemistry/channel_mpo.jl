@@ -127,15 +127,18 @@ function channel_hamiltonian(chs,nstates;start::Vector{Int},done::Vector{Int})
     for n in 2:N
         _check_passthrough(chs[n],λs[n],done[n],done[n+1],:done) || throw(ArgumentError("no Jordan form: done state of bond $n"))
     end
-    perm = map(1:N+1) do b
-        nstates[b] == 1 && return [1]
-        start[b] != done[b] || throw(ArgumentError("no Jordan form: start and done coincide on bond $b"))
-        [start[b]; [a for a in 1:nstates[b] if a != start[b] && a != done[b]]; done[b]]
-    end
+    perm = _jordan_perm(nstates,start,done)
     position = [invperm(p) for p in perm]
     return FiniteMPOHamiltonian(map(1:N) do n
         _jordan_mpotensor(chs[n],λs[n],spaces[n][perm[n]],spaces[n+1][perm[n+1]],position[n],position[n+1])
     end)
+end
+
+# per bond: the bond states in MPSKit's Jordan order (start first, done last)
+_jordan_perm(nstates,start,done) = map(eachindex(nstates)) do b
+    nstates[b] == 1 && return [1]
+    start[b] != done[b] || throw(ArgumentError("no Jordan form: start and done coincide on bond $b"))
+    [start[b]; [a for a in 1:nstates[b] if a != start[b] && a != done[b]]; done[b]]
 end
 
 # the start state of the next bond is written only by identities that read only the start state of this bond

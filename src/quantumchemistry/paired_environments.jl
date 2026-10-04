@@ -7,11 +7,9 @@
     for, and the transfers only compute the stored states (the MPO tensor restricted to them on its output side).
     The effective operators are MPSKit's own, on the rebuilt environments.
 
-    Which states pair up, and with which scalar, is found once from the environments of two random probe states
-    with generic (not too small) blocks: a pair has to match, uniquely and with the same scalar, in both. States
-    without such a partner (self-conjugate ones, or ones whose conjugate is a combination of several states) are
-    stored. Bond states that carry several sectors usually only pair per sector, so the hamiltonian should have a
-    single sector per bond state (quantum_chemistry_hamiltonian(...; split_sectors = true)).
+    Which bond states pair up, and with which scalar, is known when the hamiltonian is built (for quantum chemistry
+    from the builder's labels, see quantum_chemistry_hamiltonian(...; paired = true)); a PairedHamiltonian carries
+    it. check_conjugate_pairs verifies a pairing against the environments of a random state.
 =#
 
 const BlockTensorKit = MPSKit.BlockTensorKit     # not a dependency of this package, MPSKit loads it
@@ -30,7 +28,8 @@ function _conjenv(t)
     out
 end
 
-# per bond state: the stored state it is rebuilt from (itself if it is stored) and the scalar: env[a] = scale[a]*conj(env[from[a]])
+# per bond state (in MPSKit's order): the stored state it is rebuilt from (itself if it is stored) and the scalar,
+# env[a] = scale[a] * conjenv(env[from[a]])
 struct ConjugatePairs
     from::Vector{Int}
     scale::Vector{Float64}
@@ -44,47 +43,28 @@ function ConjugatePairs(from,scale)
 end
 ConjugatePairs(n::Int) = ConjugatePairs(collect(1:n),ones(n))
 
-# probes[p][a]: the environment of bond state a in probe state p
-function _conjugate_pairs(probes)
-    n = length(first(probes))
-    conj_probes = [[norm(t) > 1e-12 ? _conjenv(t) : nothing for t in blocks] for blocks in probes]
-    partner = zeros(Int,n); λs = zeros(n)
-    for a in 1:n
-        cands = Tuple{Int,Float64}[]
-        for c in 1:n
-            l = NaN; ok = true
-            for (blocks,cblocks) in zip(probes,conj_probes)
-                r = cblocks[a]; u = blocks[c]
-                (isnothing(r) || norm(u) <= 1e-12 || space(u) != space(r)) && (ok = false; break)
-                λ = real(dot(r,u)/dot(r,r))
-                norm(u - λ*r) <= 1e-10*norm(u) || (ok = false; break)
-                isnan(l) ? (l = λ) : (isapprox(l,λ;rtol = 1e-8) || (ok = false; break))
-            end
-            ok && push!(cands,(c,l))
-        end
-        length(cands) == 1 && ((partner[a],λs[a]) = only(cands))
-    end
-    from = collect(1:n); scale = ones(n)
-    for a in 1:n
-        c = partner[a]
-        (c > a && partner[c] == a) || continue
-        from[c] = a; scale[c] = λs[a]
-    end
-    ConjugatePairs(from,scale)
-end
+"""
+    PairedHamiltonian(H, lpairs, rpairs)
 
-# a random state with the spaces of ψ's physical legs and boundaries, and every allowed sector with multiplicity
-# up to `mult` on the bonds: generic environment blocks for finding the pairs
-function _probe_state(ψ;mult = 4)
-    N = length(ψ)
-    P = [space(ψ.AL[i],2) for i in 1:N]
-    cap(V) = typeof(V)(s => min(mult,dim(V,s)) for s in sectors(V))
-    V = [left_virtualspace(ψ,1)]
-    for i in 1:N-1
-        push!(V,cap(fuse(V[end]⊗P[i])))
-    end
-    FiniteMPS(randn,scalartype(ψ.AL[1]),P,V[2:end];left = left_virtualspace(ψ,1),right = right_virtualspace(ψ,N))
+A hermitian `FiniteMPOHamiltonian` with, per bond, which bond states are hermitian conjugates of each other in the
+left (`lpairs`) and right (`rpairs`) environments. `find_groundstate`, `environments` and `expectation_value` use
+`paired_environments` for it.
+"""
+struct PairedHamiltonian{O}
+    H::O
+    lpairs::Vector{ConjugatePairs}
+    rpairs::Vector{ConjugatePairs}
 end
+Base.length(P::PairedHamiltonian) = length(P.H)
+Base.getindex(P::PairedHamiltonian,i) = P.H[i]
+MPSKit.physicalspace(P::PairedHamiltonian,i::Int) = physicalspace(P.H,i)
+MPSKit.left_virtualspace(P::PairedHamiltonian,i::Int) = left_virtualspace(P.H,i)
+MPSKit.right_virtualspace(P::PairedHamiltonian,i::Int) = right_virtualspace(P.H,i)
+
+MPSKit.environments(ψ::FiniteMPS,P::PairedHamiltonian,args...;kwargs...) = paired_environments(ψ,P)
+MPSKit.expectation_value(ψ::FiniteMPS,P::PairedHamiltonian,envs...) = expectation_value(ψ,P.H,envs...)
+MPSKit.AC_hamiltonian(pos::Int,below,P::PairedHamiltonian,above,envs;kwargs...) = MPSKit.AC_hamiltonian(pos,below,P.H,above,envs;kwargs...)
+MPSKit.AC2_hamiltonian(pos::Int,below,P::PairedHamiltonian,above,envs;kwargs...) = MPSKit.AC2_hamiltonian(pos,below,P.H,above,envs;kwargs...)
 
 mutable struct PairedEnvironments{O,C,L,R} <: MPSKit.AbstractMPSEnvironments
     operator::O
@@ -99,30 +79,56 @@ mutable struct PairedEnvironments{O,C,L,R} <: MPSKit.AbstractMPSEnvironments
 end
 
 """
-    paired_environments(ψ, H) -> PairedEnvironments
+    paired_environments(ψ, P::PairedHamiltonian) -> PairedEnvironments
 
-Environments for `find_groundstate` (and `expectation_value`) that store and compute only one of every pair of
-hermitian-conjugate bond states of `H` (a hermitian `FiniteMPOHamiltonian`, ideally with a single sector per bond
-state, see `quantum_chemistry_hamiltonian(...; split_sectors = true)`).
+Environments that store and compute only one of every pair of hermitian-conjugate bond states; the others are
+rebuilt when asked for.
 """
-function paired_environments(ψ::FiniteMPS,H::FiniteMPOHamiltonian;mult::Int = 4)
-    N = length(ψ)
-    probes = [_probe_state(ψ;mult) for _ in 1:2]
-    penvs = [_mpskit_environments(p,H) for p in probes]
-    lpairs = [b == 1 ? ConjugatePairs(1) : _conjugate_pairs([[GL[1,a,1] for a in 1:size(GL,2)] for GL in (leftenv(e,b,p) for (e,p) in zip(penvs,probes))])
-              for b in 1:N]
-    push!(lpairs,ConjugatePairs(1))
-    rpairs = [b == N+1 || b == 1 ? ConjugatePairs(1) :
-              _conjugate_pairs([[GR[1,a,1] for a in 1:size(GR,2)] for GR in (rightenv(e,b-1,p) for (e,p) in zip(penvs,probes))])
-              for b in 1:N+1]
+function paired_environments(ψ::FiniteMPS,P::PairedHamiltonian)
+    N = length(ψ); H = P.H
     sparseW(n) = BlockTensorKit.SparseBlockTensorMap(H[n])
-    lops = Any[sparseW(n)[:,:,:,lpairs[n+1].stored] for n in 1:N]
-    rops = Any[sparseW(n)[rpairs[n].stored,:,:,:] for n in 1:N]
+    lops = Any[sparseW(n)[:,:,:,P.lpairs[n+1].stored] for n in 1:N]
+    rops = Any[sparseW(n)[P.rpairs[n].stored,:,:,:] for n in 1:N]
     menv = _mpskit_environments(ψ,H)
     GL1 = menv.GLs[1]; GRN = menv.GRs[end]
     t = similar(ψ.AL[1])
-    PairedEnvironments(H,lops,rops,lpairs,rpairs,fill(t,N),fill(t,N),
+    PairedEnvironments(H,lops,rops,P.lpairs,P.rpairs,fill(t,N),fill(t,N),
                        [b == 1 ? GL1 : similar(GL1) for b in 1:N+1],[b == N+1 ? GRN : similar(GRN) for b in 1:N+1])
+end
+
+# a random state with the spaces of ψ's physical legs and boundaries, and every allowed sector with multiplicity up
+# to `mult` on the bonds: generic environment blocks, for check_conjugate_pairs
+function _probe_state(ψ;mult = 4)
+    N = length(ψ)
+    P = [space(ψ.AL[i],2) for i in 1:N]
+    cap(V) = typeof(V)(s => min(mult,dim(V,s)) for s in sectors(V))
+    V = [left_virtualspace(ψ,1)]
+    for i in 1:N-1
+        push!(V,cap(fuse(V[end]⊗P[i])))
+    end
+    FiniteMPS(randn,scalartype(ψ.AL[1]),P,V[2:end];left = left_virtualspace(ψ,1),right = right_virtualspace(ψ,N))
+end
+
+"""
+    check_conjugate_pairs(P::PairedHamiltonian, ψ) -> worst relative residual
+
+Checks env[c] = scale * conjenv(env[from[c]]) for every pair, on the full environments of `ψ` (take a random state
+with generic blocks). Pairs whose environments both vanish are skipped.
+"""
+function check_conjugate_pairs(P::PairedHamiltonian,ψ::FiniteMPS)
+    N = length(ψ)
+    menv = _mpskit_environments(ψ,P.H)
+    worst = 0.0
+    for b in 2:N, (side,pairs) in ((:left,P.lpairs[b]),(:right,P.rpairs[b]))
+        G = side === :left ? leftenv(menv,b,ψ) : rightenv(menv,b-1,ψ)
+        for c in eachindex(pairs.from)
+            a = pairs.from[c]; a == c && continue
+            ta = G[1,a,1]; tc = G[1,c,1]
+            max(norm(ta),norm(tc)) < 1e-12 && continue
+            worst = max(worst,norm(tc - pairs.scale[c]*_conjenv(ta))/max(norm(ta),norm(tc)))
+        end
+    end
+    worst
 end
 
 # the full environment of a bond from its stored states (mpospace() gives the MPO space of the bond)
