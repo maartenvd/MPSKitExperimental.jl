@@ -32,12 +32,15 @@ const _qchem_gradient_structures_lock = ReentrantLock()
 function qchem_rdms(state)
     N = length(state)
     T = real(scalartype(state))
-    (chs,nstates) = @lock _qchem_gradient_structures_lock get!(_qchem_gradient_structures,(N,T)) do
+    S = @lock _qchem_gradient_structures_lock get!(_qchem_gradient_structures,(N,T)) do
         (sym,ns,_) = qchem_structure(N,T)
         (pruned,kept) = prune_channels(sym,ns)
-        (pruned,length.(kept))
+        nb = length(kept)
+        GradientStructure(pruned,length.(kept);nparams = qchem_nparameters(N),
+                          start = [b == nb ? 1 : findfirst(==(1),kept[b]) for b in 1:nb],
+                          done = [b == 1 ? 1 : findfirst(==(ns[b]),kept[b]) for b in 1:nb])
     end
-    (g,_) = channel_gradient(normalize(state),chs,nstates;nparams=qchem_nparameters(N))
+    (g,_) = channel_gradient(normalize(state),S)
     dK = reshape(g[2:1+N^2],N,N)
     dV = reshape(g[2+N^2:end],N,N,N,N)
     (dV,dK)
