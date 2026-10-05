@@ -1368,56 +1368,44 @@ function qchem_structure(N::Int,::Type{T}=Float64) where T
 end
 
 """
-    quantum_chemistry_hamiltonian(E0, K, V, T = Float64; paired = false, split_sectors = false)
+    quantum_chemistry_hamiltonian(E0, K, V, T = Float64; paired = false)
 
 E0 + ∑ K[i,j] c⁺ᵢcⱼ + ∑ V[i,j,k,l] c⁺ᵢc⁺ⱼcₖcₗ on a U₁ × SU₂ × fermion parity symmetric chain (the arguments
-are what `parse_fcidump` returns), as a `FiniteMPOHamiltonian` in the builder's bond basis, without the states
-and channels that vanish for these integrals.
+are what `parse_fcidump` returns), as a `FiniteMPOHamiltonian` in the builder's bond basis, with every bond state
+split per sector and without the states, sectors and channels that vanish for these integrals.
 
-- `paired = true` gives a `PairedHamiltonian`: the same hamiltonian, with every bond state split per sector and
-  the pairs of hermitian-conjugate bond states attached, so that DMRG stores and computes the environments of only
-  one of every pair (see `paired_environments`).
-- `split_sectors = true` makes every bond state carry a single sector (same cost).
+`paired = true` gives a `PairedHamiltonian`: the same hamiltonian with the pairs of hermitian-conjugate bond
+states attached, so that DMRG stores and computes the environments of only one of every pair (see
+`paired_environments`).
 """
-function quantum_chemistry_hamiltonian(E0,K,V,::Type{T}=Float64;paired::Bool = false,split_sectors::Bool = paired) where T
-
-    paired && !split_sectors && throw(ArgumentError("paired needs split_sectors"))
-    
+function quantum_chemistry_hamiltonian(E0,K,V,::Type{T}=Float64;paired::Bool = false) where T
     (chs,nstates,_,labels) = qchem_structure(size(K,1),T)
-    
     chs = evaluate_channels(chs,T.(real.(qchem_parameters(E0,K,V))))
-
     (chs,kept) = prune_channels(chs,nstates)
-    
     nb = length(kept)
-    
+
     # where the builder's start (1) and done (nstates) states ended up
     pos(b,old) = (p = findfirst(==(old),kept[b]); isnothing(p) && throw(ArgumentError("bond $b lost its start or done state")); p)
     start = [b == nb ? 1 : pos(b,1) for b in 1:nb]; done = [b == 1 ? 1 : pos(b,nstates[b]) for b in 1:nb]
-    ns = length.(kept)
-    
-    # what every bond state is: (label, sector), the sector only known after splitting
-    what = [[(labels[k],nothing) for k in kept[b]] for b in 1:nb]
-    if split_sectors
-        (chs,ns,parts) = MPSKitExperimental.split_sectors(chs,ns)
-        start = [findfirst(p -> p[1] == start[b],parts[b]) for b in 1:nb]
-        done = [findfirst(p -> p[1] == done[b],parts[b]) for b in 1:nb]
-        what = [[(labels[kept[b][a]],s) for (a,s) in parts[b]] for b in 1:nb]
-        # a sector of a bond state can be dead even when the state is not (a pair of operators on one orbital
-        # vanishes in the triplet, by Pauli), so prune once more
-        (chs,kept2) = prune_channels(chs,ns)
-        start = [findfirst(==(start[b]),kept2[b]) for b in 1:nb]
-        done = [findfirst(==(done[b]),kept2[b]) for b in 1:nb]
-        what = [what[b][kept2[b]] for b in 1:nb]
-        ns = length.(kept2)
-    end
-    
+
+    # one bond state per sector: the sectors of a bond state pair up with different partners, and a sector can be
+    # dead even when its state is not (a pair of operators on one orbital vanishes in the triplet, by Pauli), which
+    # the second pruning removes
+    (chs,ns,parts) = split_sectors(chs,length.(kept))
+    start = [findfirst(p -> p[1] == start[b],parts[b]) for b in 1:nb]
+    done = [findfirst(p -> p[1] == done[b],parts[b]) for b in 1:nb]
+    (chs,kept2) = prune_channels(chs,ns)
+    start = [findfirst(==(start[b]),kept2[b]) for b in 1:nb]
+    done = [findfirst(==(done[b]),kept2[b]) for b in 1:nb]
+    ns = length.(kept2)
+
     h = channel_hamiltonian(chs,ns;start,done)
     paired || return h
+    # what every bond state is, (label, sector), in the order of the environments
+    what = [[(labels[kept[b][parts[b][p][1]]],parts[b][p][2]) for p in kept2[b]] for b in 1:nb]
     perm = _jordan_perm(ns,start,done)
-    jordan = [what[b][perm[b]] for b in 1:nb]             # (label, sector) per environment position
-    PairedHamiltonian(h,[_qchem_conjugate_pairs(jordan[b],:left) for b in 1:nb],
-                        [_qchem_conjugate_pairs(jordan[b],:right) for b in 1:nb])
+    PairedHamiltonian(h,[_qchem_conjugate_pairs(what[b][perm[b]],:left) for b in 1:nb],
+                        [_qchem_conjugate_pairs(what[b][perm[b]],:right) for b in 1:nb])
 end
 
 #=
