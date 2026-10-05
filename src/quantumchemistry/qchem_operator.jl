@@ -1368,7 +1368,7 @@ function qchem_structure(N::Int,::Type{T}=Float64) where T
 end
 
 """
-    quantum_chemistry_hamiltonian(E0, K, V, T = Float64; paired = false, hermitian_half = false, split_sectors = false)
+    quantum_chemistry_hamiltonian(E0, K, V, T = Float64; paired = false, split_sectors = false)
 
 E0 + ∑ K[i,j] c⁺ᵢcⱼ + ∑ V[i,j,k,l] c⁺ᵢc⁺ⱼcₖcₗ on a U₁ × SU₂ × fermion parity symmetric chain (the arguments
 are what `parse_fcidump` returns), as a `FiniteMPOHamiltonian` in the builder's bond basis, without the states
@@ -1377,23 +1377,16 @@ and channels that vanish for these integrals.
 - `paired = true` gives a `PairedHamiltonian`: the same hamiltonian, with every bond state split per sector and
   the pairs of hermitian-conjugate bond states attached, so that DMRG stores and computes the environments of only
   one of every pair (see `paired_environments`).
-- `hermitian_half = true` gives a `HermitianHalf(h)` with h + h† = H: DMRG then only needs h's environments (about
-  two thirds of the bond states) and h's precomputed effective operators, but applies two of them per matvec.
 - `split_sectors = true` makes every bond state carry a single sector (same cost).
 """
-function quantum_chemistry_hamiltonian(E0,K,V,::Type{T}=Float64;paired::Bool = false,hermitian_half::Bool = false,
-                                       split_sectors::Bool = paired) where T
-    
-    paired && hermitian_half && throw(ArgumentError("paired needs the full (hermitian) hamiltonian"))
-    
+function quantum_chemistry_hamiltonian(E0,K,V,::Type{T}=Float64;paired::Bool = false,split_sectors::Bool = paired) where T
+
     paired && !split_sectors && throw(ArgumentError("paired needs split_sectors"))
     
     (chs,nstates,_,labels) = qchem_structure(size(K,1),T)
     
     chs = evaluate_channels(chs,T.(real.(qchem_parameters(E0,K,V))))
-    
-    hermitian_half && (chs = _qchem_half_channels(chs))
-    
+
     (chs,kept) = prune_channels(chs,nstates)
     
     nb = length(kept)
@@ -1420,7 +1413,6 @@ function quantum_chemistry_hamiltonian(E0,K,V,::Type{T}=Float64;paired::Bool = f
     end
     
     h = channel_hamiltonian(chs,ns;start,done)
-    hermitian_half && return HermitianHalf(h)
     paired || return h
     perm = _jordan_perm(ns,start,done)
     jordan = [what[b][perm[b]] for b in 1:nb]             # (label, sector) per environment position
@@ -1451,22 +1443,4 @@ function _qchem_conjugate_pairs(states,side)
         from[c] = a; scale[c] = _qchem_pairsign(l,side)
     end
     ConjugatePairs(from,scale)
-end
-
-# h with h + h† = H. Every path of H leaves the start state (bond state 1) once, into a bond state with U₁ charge q;
-# its conjugate leaves at the same site with charge -q. Keeping the q > 0 paths, dropping the q < 0 ones and halving
-# the q = 0 ones (a hermitian set on its own) gives h + h† = H exactly.
-function _qchem_half_channels(chs)
-    u1(V) = (cs = unique(first(s.sectors).charge for s in sectors(V)); length(cs) == 1 || error("bond state with mixed charges $cs"); only(cs))
-    map(chs) do site
-        map(site) do c
-            i = findfirst(==(1),c.lidx)
-            (isnothing(i) || c.ridx == [1]) && return c
-            q = u1(space(c.op,4)')
-            q > 0 && return c
-            lv = copy(c.lval); lv[i] *= (q < 0 ? 0 : 1//2)
-            keep = .!iszero.(lv)
-            Channel(c.lidx[keep],lv[keep],c.op,c.rval,c.ridx)
-        end
-    end
 end
