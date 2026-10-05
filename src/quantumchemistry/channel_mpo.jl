@@ -63,38 +63,6 @@ function prune_channels(chs,nstates;start::Int = 1,done::Int = nstates[end])
     return out,[findall(l) for l in live]
 end
 
-"""
-    split_sectors(chs, nstates) -> (chs, nstates, parts)
-
-The same hamiltonian with every bond state that carries several sectors split into one bond state per sector:
-the channels are projected onto every (left sector, right sector) combination of their operator's virtual legs.
-`parts[b]` lists, per new bond state of bond `b`, the old state and the sector. Nothing changes in cost (the
-operators were block diagonal in these sectors anyway), but every bond state now has a single sector, which
-is what pairing bond states with their hermitian conjugates needs.
-"""
-function split_sectors(chs,nstates)
-    N = length(chs)
-    spaces = channel_bondspaces(chs,nstates)
-    parts = [[(a,s) for a in 1:nstates[b] for s in sectors(spaces[b][a])] for b in 1:N+1]
-    newidx = [Dict(p => i for (i,p) in enumerate(parts[b])) for b in 1:N+1]
-    restrict(V,s) = isdual(V) ? typeof(V)(dual(s) => dim(V,s))' : typeof(V)(s => dim(V,s))   # the sector-s part of V
-    out = map(1:N) do n
-        site = eltype(chs[n])[]
-        for c in chs[n]
-            Vl = space(c.op,1); Vr = space(c.op,4)'          # the bond spaces it reads and writes (not dual)
-            for s in sectors(Vl), t in sectors(Vr)
-                El = isometry(storagetype(c.op),Vl,restrict(Vl,s))
-                Er = isometry(storagetype(c.op),Vr,restrict(Vr,t))
-                @planar o[-1 -2; -3 -4] := El'[-1; 1] * c.op[1 -2; -3 2] * Er[2; -4]
-                norm(o) < 1e-14*max(norm(c.op),1) && continue
-                push!(site,Channel([newidx[n][(a,s)] for a in c.lidx],c.lval,o,c.rval,[newidx[n+1][(b,t)] for b in c.ridx]))
-            end
-        end
-        site
-    end
-    return out,length.(parts),parts
-end
-
 # per bond state: its virtual space, from the channels that read it (space(op,1)) or write it (space(op,4)')
 function channel_bondspaces(chs,nstates)
     N = length(chs)

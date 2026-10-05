@@ -100,17 +100,21 @@ function _qchem_symbolic(basis_size::Int,::Type{T}) where T
         indmap_2R[pm1,end-j+1,pm2,end-i+1] = cnt
     end
 
-    # what every bond state is: start, done, a single operator (pm = 1, 2) on orbital i placed on the left (:L1) or
-    # still to come on the right (:R1), or a pair of operators on orbitals i ≤ j (:P2; on the right half of the
-    # chain this number stands for the complementary pair, indmap_2R)
-    labels = Vector{Any}(undef,cnt+1)
-    labels[1] = (:start,); labels[cnt+1] = (:done,)
-    for i in 1:2, j in 1:basis_size
-        labels[indmap_1L[i,j]] = (:L1,i,j)
-        labels[indmap_1R[i,j]] = (:R1,i,j)
+    # the hermitian conjugate of every bond state. Conjugation flips every operator (pm ↦ 3 - pm) and reverses their
+    # order, (A_i B_j)† = B_j† A_i†: for a pair on two orbitals that is only a sign, for a pair on one orbital it
+    # decides the partner (a†ᵢaᵢ-type states are their own conjugate). The sector of a state goes to its dual. The
+    # environments then satisfy env(partner) = scale * conjenv(env), with scale ±1 per kind of state and side
+    # (lscale for left environments, rscale for right ones; checked against environments of random states).
+    # The 2R states share their numbers with the 2L ones and conjugate the same way.
+    partner = collect(1:cnt+1); lscale = ones(cnt+1); rscale = ones(cnt+1)
+    for pm in 1:2, i in 1:basis_size
+        a = indmap_1L[pm,i]; partner[a] = indmap_1L[3-pm,i]; lscale[a] = 1; rscale[a] = -1
+        a = indmap_1R[pm,i]; partner[a] = indmap_1R[3-pm,i]; lscale[a] = -1; rscale[a] = 1
     end
     for pm1 in 1:2, i in 1:half_basis_size, pm2 in 1:2, j in i:half_basis_size
-        labels[indmap_2L[pm1,i,pm2,j]] = (:P2,pm1,i,pm2,j)
+        a = indmap_2L[pm1,i,pm2,j]
+        partner[a] = i == j ? indmap_2L[3-pm2,i,3-pm1,j] : indmap_2L[3-pm1,i,3-pm2,j]
+        lscale[a] = rscale[a] = pm1 == pm2 ? -1 : 1
     end
 
     function masks(a,b)
@@ -1307,8 +1311,30 @@ function _qchem_symbolic(basis_size::Int,::Type{T}) where T
         end
     end
 
+    # one bond state per sector: the states of operator pairs carry a singlet and a triplet, which conjugate to
+    # different partners. parts[b] lists (builder state, sector) per new bond state of bond b, in the order of the
+    # builder states, so start stays first and done last. Every operator is split per (left sector, right sector);
+    # a sector that nothing reaches (the triplet of a pair on one orbital, by Pauli) is left without channels and
+    # pruned with the rest.
+    parts = [[(a,s) for a in 1:cnt+1 for s in sectors(domspaces[b,a])] for b in 1:basis_size+1]
+    newindex = [Dict(p => k for (k,p) in enumerate(pb)) for pb in parts]
+    restrict(V,s) = isdual(V) ? typeof(V)(dual(s) => dim(V,s))' : typeof(V)(s => dim(V,s))
+    function project(o,s,t)
+        El = isometry(storagetype(o),space(o,1),restrict(space(o,1),s))
+        Er = isometry(storagetype(o),space(o,4)',restrict(space(o,4)',t))
+        @planar p[-1 -2; -3 -4] := El'[-1; 1]*o[1 -2; -3 2]*Er[2; -4]
+        p
+    end
+
     sitechannels = map(1:basis_size) do i
         chs = Tuple{Vector{Int},Vector{Elt},O,Vector{Elt},Vector{Int}}[];
+        function emit!(lm,lb,o,rb,rm)
+            for s in sectors(space(o,1)), t in sectors(space(o,4)')
+                p = project(o,s,t)
+                norm(p) < 1e-14*max(norm(o),1) && continue
+                push!(chs,([newindex[i][(a,s)] for a in findall(lm)],lb,p,rb,[newindex[i+1][(b,t)] for b in findall(rm)]))
+            end
+        end
 
         for (lm,lb,o,rb,rm) in op_blocks[i]
             @assert sum(lm) == length(lb)
@@ -1321,7 +1347,7 @@ function _qchem_symbolic(basis_size::Int,::Type{T}) where T
             for sp in domspaces[i+1,rm]
                 @assert space(o,4)' == sp
             end
-            push!(chs,(findall(lm),lb,o,rb,findall(rm)));
+            emit!(lm,lb,o,rb,rm)
         end
         for (lm,lb,o,rb,rm) in scal_blocks[i]
             @assert sum(lm) == length(lb)
@@ -1341,29 +1367,35 @@ function _qchem_symbolic(basis_size::Int,::Type{T}) where T
             virt = isomorphism(storagetype(O),left_v,left_v);
             phys = isomorphism(storagetype(O),psp,psp);
             @plansor to[-1 -2;-3 -4] := virt[-1;1]*phys[-2;2]*τ[1 2;-3 -4]
-            push!(chs,(findall(lm),lb,to,rb,findall(rm)));
+            emit!(lm,lb,to,rb,rm)
         end
         chs
     end
 
-    # environments start on bond state 1 and end on bond state cnt+1
-    return sitechannels,fill(cnt+1,basis_size+1),psp,labels
+    # per bond and bond state: its hermitian conjugate (0 if that sector is not on this bond) and the scales
+    conjugates = map(1:basis_size+1) do b
+        [(get(newindex[b],(partner[a],dual(s)),0),lscale[a],rscale[a]) for (a,s) in parts[b]]
+    end
+
+    # environments start on the first bond state and end on the last one
+    return sitechannels,length.(parts),psp,conjugates
 end
 
 const _qchem_structures = Dict{Tuple{Int,DataType},Any}()
 const _qchem_structures_lock = ReentrantLock()
 
 """
-    qchem_structure(N, T = Float64) -> (chs, nstates, psp, labels)
+    qchem_structure(N, T = Float64) -> (chs, nstates, psp, conjugates)
 
 The quantum chemistry hamiltonian on `N` orbitals with symbolic integrals, as channels (see channel_mpo.jl) whose
-weights are `LinComb{T}`s in θ = (E0, vec(K), vec(V)). The bond states are numbered 1 (start) to nstates[b] (done)
-on every bond `b`; `labels[a]` says what bond state `a` is. Built once per `N` and cached.
+weights are `LinComb{T}`s in θ = (E0, vec(K), vec(V)), with one bond state per sector. The bond states are numbered
+1 (start) to nstates[b] (done) on every bond `b`; `conjugates[b][a]` is (the hermitian conjugate of bond state `a`,
+its scale in left environments, in right environments). Built once per `N` and cached.
 """
 function qchem_structure(N::Int,::Type{T}=Float64) where T
     @lock _qchem_structures_lock get!(_qchem_structures,(N,T)) do
-        (sitechannels,nstates,psp,labels) = _qchem_symbolic(N,T)
-        ([[Channel(c...) for c in site] for site in sitechannels],nstates,psp,labels)
+        (sitechannels,nstates,psp,conjugates) = _qchem_symbolic(N,T)
+        ([[Channel(c...) for c in site] for site in sitechannels],nstates,psp,conjugates)
     end
 end
 
@@ -1371,64 +1403,43 @@ end
     quantum_chemistry_hamiltonian(E0, K, V, T = Float64; paired = false)
 
 E0 + ∑ K[i,j] c⁺ᵢcⱼ + ∑ V[i,j,k,l] c⁺ᵢc⁺ⱼcₖcₗ on a U₁ × SU₂ × fermion parity symmetric chain (the arguments
-are what `parse_fcidump` returns), as a `FiniteMPOHamiltonian` in the builder's bond basis, with every bond state
-split per sector and without the states, sectors and channels that vanish for these integrals.
+are what `parse_fcidump` returns), as a `FiniteMPOHamiltonian` in the builder's bond basis (one bond state per
+sector), without the states and channels that vanish for these integrals.
 
 `paired = true` gives a `PairedHamiltonian`: the same hamiltonian with the pairs of hermitian-conjugate bond
 states attached, so that DMRG stores and computes the environments of only one of every pair (see
 `paired_environments`).
 """
 function quantum_chemistry_hamiltonian(E0,K,V,::Type{T}=Float64;paired::Bool = false) where T
-    (chs,nstates,_,labels) = qchem_structure(size(K,1),T)
+    (chs,nstates,_,conjugates) = qchem_structure(size(K,1),T)
     chs = evaluate_channels(chs,T.(real.(qchem_parameters(E0,K,V))))
     (chs,kept) = prune_channels(chs,nstates)
     nb = length(kept)
 
-    # where the builder's start (1) and done (nstates) states ended up
+    # where the builder's start (first) and done (last) states ended up
     pos(b,old) = (p = findfirst(==(old),kept[b]); isnothing(p) && throw(ArgumentError("bond $b lost its start or done state")); p)
     start = [b == nb ? 1 : pos(b,1) for b in 1:nb]; done = [b == 1 ? 1 : pos(b,nstates[b]) for b in 1:nb]
-
-    # one bond state per sector: the sectors of a bond state pair up with different partners, and a sector can be
-    # dead even when its state is not (a pair of operators on one orbital vanishes in the triplet, by Pauli), which
-    # the second pruning removes
-    (chs,ns,parts) = split_sectors(chs,length.(kept))
-    start = [findfirst(p -> p[1] == start[b],parts[b]) for b in 1:nb]
-    done = [findfirst(p -> p[1] == done[b],parts[b]) for b in 1:nb]
-    (chs,kept2) = prune_channels(chs,ns)
-    start = [findfirst(==(start[b]),kept2[b]) for b in 1:nb]
-    done = [findfirst(==(done[b]),kept2[b]) for b in 1:nb]
-    ns = length.(kept2)
+    ns = length.(kept)
 
     h = channel_hamiltonian(chs,ns;start,done)
     paired || return h
-    # what every bond state is, (label, sector), in the order of the environments
-    what = [[(labels[kept[b][parts[b][p][1]]],parts[b][p][2]) for p in kept2[b]] for b in 1:nb]
     perm = _jordan_perm(ns,start,done)
-    PairedHamiltonian(h,[_qchem_conjugate_pairs(what[b][perm[b]],:left) for b in 1:nb],
-                        [_qchem_conjugate_pairs(what[b][perm[b]],:right) for b in 1:nb])
+    PairedHamiltonian(h,[_qchem_conjugate_pairs(conjugates[b],kept[b],perm[b],:left) for b in 1:nb],
+                        [_qchem_conjugate_pairs(conjugates[b],kept[b],perm[b],:right) for b in 1:nb])
 end
 
-#=
-    Hermitian-conjugate bond states of the qchem hamiltonian, from the builder's labels. Conjugation flips every
-    operator (pm ↦ 3 - pm) and reverses their order, (A_i B_j)† = B_j† A_i†, and maps the sector to its dual. For a
-    pair on two orbitals the reversal is only a sign, for a pair on one orbital it decides the partner: a†ᵢaᵢ-type
-    states are their own conjugate. The environments satisfy env(ā) = scale * conjenv(env(a)), with a scale ±1
-    depending on the kind of state and on the side. Checked against the environments of random states for N₂
-    STO-3G and cc-pVDZ.
-=#
-_qchem_conjlabel(l) = l[1] === :L1 || l[1] === :R1 ? (l[1],3-l[2],l[3]) :
-                      l[1] === :P2 ? (l[3] == l[5] ? (:P2,3-l[4],l[3],3-l[2],l[5]) : (:P2,3-l[2],l[3],3-l[4],l[5])) : l
-_qchem_pairsign(l,side) = l[1] === :L1 ? (side === :left ? 1.0 : -1.0) :
-                          l[1] === :R1 ? (side === :left ? -1.0 : 1.0) : (l[2] == l[4] ? -1.0 : 1.0)
-function _qchem_conjugate_pairs(states,side)
-    n = length(states)
+# the builder's conjugate pairs in the order of the environments: of every pair the first is stored, the second is
+# rebuilt from it; states whose partner was pruned, or that are their own conjugate, are stored
+function _qchem_conjugate_pairs(conj,kept,perm,side)
+    n = length(perm)
     n == 1 && return ConjugatePairs(1)
+    position = Dict(kept[perm[x]] => x for x in 1:n)
     from = collect(1:n); scale = ones(n)
-    index = Dict(states[x] => x for x in 1:n)
-    for (a,(l,s)) in enumerate(states)
-        c = get(index,(_qchem_conjlabel(l),dual(s)),0)
-        c > a || continue
-        from[c] = a; scale[c] = _qchem_pairsign(l,side)
+    for x in 1:n
+        (p,ls,rs) = conj[kept[perm[x]]]
+        y = get(position,p,0)
+        y > x || continue
+        from[y] = x; scale[y] = side === :left ? ls : rs
     end
     ConjugatePairs(from,scale)
 end

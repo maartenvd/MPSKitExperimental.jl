@@ -8,7 +8,7 @@
     The effective operators are MPSKit's own, on the rebuilt environments.
 
     Which bond states pair up, and with which scalar, is known when the hamiltonian is built (for quantum chemistry
-    from the builder's labels, see quantum_chemistry_hamiltonian(...; paired = true)); a PairedHamiltonian carries
+    the builder records every bond state's conjugate, see quantum_chemistry_hamiltonian(...; paired = true)); a PairedHamiltonian carries
     it. check_conjugate_pairs verifies a pairing against the environments of a random state.
 =#
 
