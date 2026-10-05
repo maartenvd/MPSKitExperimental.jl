@@ -1,18 +1,3 @@
-# in this file I did not exploit symmetries in the ERI
-
-#=
-
-I took mpskitmodel's implementation of the qchem hamiltonian (which is somewhat readable) and propped it into
-channels. Code is now impossible to read, but essentially identical in spirit to mpskitmodel's implementation.
-
-The builder runs once per number of orbitals with symbolic integrals (LinComb, see channel_gradient.jl), so every
-coefficient is a linear combination of θ = (E0, vec(K), vec(V)) and all of them end up in the channel weights.
-quantum_chemistry_hamiltonian evaluates that structure for given integrals, qchem_rdms differentiates it.
-
-=#
-
-
-
 
 # x * o_1 = o_2
 find_left_map(o_1,o_2) = (o_2*o_1')*pinv(o_1*o_1');
@@ -23,6 +8,21 @@ find_right_map(o_1,o_2) = pinv(o_1'*o_1)*o_1'*o_2
 # θ = (E0, vec(K), vec(V))
 qchem_parameters(E0,K,V) = [E0; vec(K); vec(V)]
 qchem_nparameters(N) = 1+N^2+N^4
+
+#=
+This object builds the quantum chemistry hamiltonian in a symbolic way.
+Code is largely hand written, and hard to follow.
+
+It returns a representation of the mpo hamiltonian in symbolic form (lincomb_param).
+    - param 1 is the energy offset
+    - the following N^2 parameters is K
+    - the other parameters come from the 4 body interaction
+
+It also labels how channels are related to eachother (you can sometimes conjugate one channel to get another)
+
+I can then use this to get the quantum chemistry hamiltonian (just put the actual weights in, and prune/compress)
+Or I can use this to get the RDMs.
+=#
 
 function _qchem_symbolic(basis_size::Int,::Type{T}) where T
     Elt = LinComb{T}
@@ -1383,17 +1383,26 @@ and channels that vanish for these integrals.
 """
 function quantum_chemistry_hamiltonian(E0,K,V,::Type{T}=Float64;paired::Bool = false,hermitian_half::Bool = false,
                                        split_sectors::Bool = paired) where T
+    
     paired && hermitian_half && throw(ArgumentError("paired needs the full (hermitian) hamiltonian"))
+    
     paired && !split_sectors && throw(ArgumentError("paired needs split_sectors"))
+    
     (chs,nstates,_,labels) = qchem_structure(size(K,1),T)
+    
     chs = evaluate_channels(chs,T.(real.(qchem_parameters(E0,K,V))))
+    
     hermitian_half && (chs = _qchem_half_channels(chs))
+    
     (chs,kept) = prune_channels(chs,nstates)
+    
     nb = length(kept)
+    
     # where the builder's start (1) and done (nstates) states ended up
     pos(b,old) = (p = findfirst(==(old),kept[b]); isnothing(p) && throw(ArgumentError("bond $b lost its start or done state")); p)
     start = [b == nb ? 1 : pos(b,1) for b in 1:nb]; done = [b == 1 ? 1 : pos(b,nstates[b]) for b in 1:nb]
     ns = length.(kept)
+    
     # what every bond state is: (label, sector), the sector only known after splitting
     what = [[(labels[k],nothing) for k in kept[b]] for b in 1:nb]
     if split_sectors
@@ -1401,7 +1410,15 @@ function quantum_chemistry_hamiltonian(E0,K,V,::Type{T}=Float64;paired::Bool = f
         start = [findfirst(p -> p[1] == start[b],parts[b]) for b in 1:nb]
         done = [findfirst(p -> p[1] == done[b],parts[b]) for b in 1:nb]
         what = [[(labels[kept[b][a]],s) for (a,s) in parts[b]] for b in 1:nb]
+        # a sector of a bond state can be dead even when the state is not (a pair of operators on one orbital
+        # vanishes in the triplet, by Pauli), so prune once more
+        (chs,kept2) = prune_channels(chs,ns)
+        start = [findfirst(==(start[b]),kept2[b]) for b in 1:nb]
+        done = [findfirst(==(done[b]),kept2[b]) for b in 1:nb]
+        what = [what[b][kept2[b]] for b in 1:nb]
+        ns = length.(kept2)
     end
+    
     h = channel_hamiltonian(chs,ns;start,done)
     hermitian_half && return HermitianHalf(h)
     paired || return h
@@ -1412,17 +1429,15 @@ function quantum_chemistry_hamiltonian(E0,K,V,::Type{T}=Float64;paired::Bool = f
 end
 
 #=
-    Hermitian-conjugate bond states of the qchem hamiltonian, from the builder's labels. Conjugation keeps the
-    orbitals and flips every operator (pm ↦ 3 - pm), and maps the sector to its dual. The environments then satisfy
-    env(ā) = scale * conjenv(env(a)) with scale ±1 depending on the kind of state and the side. Two kinds are not
-    pairs: a†ᵢaᵢ-type states on one orbital (their conjugate is themselves, not aᵢa†ᵢ = 1 - a†ᵢaᵢ), and, in right
-    environments, the triplet states of an operator pair on one orbital (their conjugate is a combination).
-    Checked against the environments of random states for N₂ STO-3G and cc-pVDZ (to 3e-13).
+    Hermitian-conjugate bond states of the qchem hamiltonian, from the builder's labels. Conjugation flips every
+    operator (pm ↦ 3 - pm) and reverses their order, (A_i B_j)† = B_j† A_i†, and maps the sector to its dual. For a
+    pair on two orbitals the reversal is only a sign, for a pair on one orbital it decides the partner: a†ᵢaᵢ-type
+    states are their own conjugate. The environments satisfy env(ā) = scale * conjenv(env(a)), with a scale ±1
+    depending on the kind of state and on the side. Checked against the environments of random states for N₂
+    STO-3G and cc-pVDZ.
 =#
 _qchem_conjlabel(l) = l[1] === :L1 || l[1] === :R1 ? (l[1],3-l[2],l[3]) :
-                      l[1] === :P2 ? (:P2,3-l[2],l[3],3-l[4],l[5]) : l
-_qchem_pairable(l,s,side) = l[1] === :L1 || l[1] === :R1 ||
-    (l[1] === :P2 && (l[3] != l[5] || (l[2] == l[4] && (side === :left || s.sectors[2].j == 0))))
+                      l[1] === :P2 ? (l[3] == l[5] ? (:P2,3-l[4],l[3],3-l[2],l[5]) : (:P2,3-l[2],l[3],3-l[4],l[5])) : l
 _qchem_pairsign(l,side) = l[1] === :L1 ? (side === :left ? 1.0 : -1.0) :
                           l[1] === :R1 ? (side === :left ? -1.0 : 1.0) : (l[2] == l[4] ? -1.0 : 1.0)
 function _qchem_conjugate_pairs(states,side)
@@ -1431,7 +1446,6 @@ function _qchem_conjugate_pairs(states,side)
     from = collect(1:n); scale = ones(n)
     index = Dict(states[x] => x for x in 1:n)
     for (a,(l,s)) in enumerate(states)
-        _qchem_pairable(l,s,side) || continue
         c = get(index,(_qchem_conjlabel(l),dual(s)),0)
         c > a || continue
         from[c] = a; scale[c] = _qchem_pairsign(l,side)
